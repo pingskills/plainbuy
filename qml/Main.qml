@@ -9,6 +9,10 @@ ApplicationWindow {
     // Auto fields follow the balance and order book until the user types in them.
     property bool amountAuto: true
     property bool priceAuto: true
+    // Fields are shown when either value is custom, or on request.
+    property bool editOpen: false
+    readonly property bool editing: editOpen || !amountAuto || !priceAuto
+    property bool historyOpen: false
     property var confirmQuote: ({})
     readonly property var quote: {
         Buyer.availableAud; Buyer.bestAsk
@@ -21,9 +25,9 @@ ApplicationWindow {
         if (priceAuto) priceField.text = Buyer.marketPriceFor(amountField.text)
     }
     width: 540
-    height: 520
+    height: 560
     minimumWidth: 400
-    minimumHeight: 320
+    minimumHeight: 480
     visible: true
     title: "PlainBuy"
     color: Theme.background
@@ -45,7 +49,7 @@ ApplicationWindow {
     Component.onCompleted: {
         Buyer.refreshBestAsk()
         // Ask for the passphrase (or first-run keys) once per launch.
-        Qt.callLater(window.openKeys)
+        Qt.callLater(function() { if (!window.unlocked) window.openKeys() })
     }
     Connections {
         target: Buyer
@@ -69,6 +73,12 @@ ApplicationWindow {
     menuBar: MenuBar {
         Menu {
             title: qsTr("&File")
+            Action {
+                text: qsTr("&Refresh now")
+                shortcut: StandardKey.Refresh
+                enabled: !Buyer.previewLoading && !Buyer.busy
+                onTriggered: { Buyer.refreshBestAsk(); Buyer.refreshBalance(); Buyer.refreshOrderStatus() }
+            }
             Action { text: qsTr("&Quit"); shortcut: StandardKey.Quit; onTriggered: Qt.quit() }
         }
         Menu {
@@ -311,10 +321,10 @@ ApplicationWindow {
                 Repeater {
                     // Label and value cells, row by row.
                     model: [
-                        qsTr("Buy"), qsTr("%1 BTC").arg(window.btc(window.confirmQuote.btc)),
+                        qsTr("Order quantity"), qsTr("%1 BTC").arg(window.btc(window.confirmQuote.btc)),
                         qsTr("At most"), qsTr("A$%1 per BTC").arg(window.money(window.confirmQuote.maxPrice)),
                         qsTr("Trade value up to"), "A$" + window.money(window.confirmQuote.tradeValue),
-                        qsTr("0.1% Markets fee"), "A$" + window.money(window.confirmQuote.fee),
+                        qsTr("CoinSpot fee (0.1%)"), qsTr("up to A$%1").arg(window.money(window.confirmQuote.fee)),
                         qsTr("Total up to"), qsTr("A$%1 of your A$%2").arg(window.money(window.confirmQuote.total)).arg(window.money(window.confirmQuote.limit))
                     ]
                     delegate: Label {
@@ -388,85 +398,28 @@ ApplicationWindow {
         contentWidth: availableWidth
         ColumnLayout {
             width: parent.width
-            spacing: 18
-            Item { Layout.preferredHeight: 4 }
-            ColumnLayout {
+            spacing: 14
+            Item { Layout.preferredHeight: 6 }
+            // Market: one compact line; the book refreshes itself every 15 s.
+            RowLayout {
                 Layout.fillWidth: true
                 Layout.leftMargin: 28
                 Layout.rightMargin: 28
-                spacing: 7
-                RowLayout {
-                    Layout.fillWidth: true
-                    Label { text: qsTr("BTC / AUD"); color: Theme.muted; font.letterSpacing: 1.4 }
-                    Item { Layout.fillWidth: true }
-                    Label { visible: window.unlocked; text: Buyer.keysVerified ? qsTr("Keys verified") : qsTr("Keys not verified"); color: Theme.muted }
-                    Button {
-                        visible: window.unlocked
-                        text: qsTr("Set keys…")
-                        onClicked: credentialsDialog.open()
-                    }
-                }
+                spacing: 8
+                Label { text: qsTr("BTC/AUD ask"); color: Theme.muted }
                 Label {
-                    Layout.fillWidth: true
-                    visible: window.unlocked
-                    text: qsTr("Full Access: %1 · Read Only: %2").arg(Buyer.fullKeyStatus).arg(Buyer.readKeyStatus)
-                    color: Theme.muted
-                    wrapMode: Text.Wrap
-                }
-                Label {
-                    Layout.fillWidth: true
-                    visible: text.length > 0
-                    text: window.saveWhenVerified
-                          ? qsTr("The new keys will be offered for saving once CoinSpot verifies both.")
-                          : window.saveSkipped
-                            ? qsTr("The new keys were not saved because CoinSpot did not verify both. Any saved key file is unchanged.")
-                            : ""
+                    text: Buyer.bestAsk ? "A$" + window.money(Buyer.bestAsk) : qsTr("unavailable")
                     color: Theme.text
-                    wrapMode: Text.Wrap
+                    font.weight: Font.DemiBold
+                    font.features: { "tnum": 1 }
                 }
-                RowLayout {
-                    Layout.fillWidth: true
-                    Label { text: qsTr("Best ask"); color: Theme.muted }
-                    Label {
-                        text: Buyer.bestAsk ? "A$" + window.money(Buyer.bestAsk) : qsTr("Unavailable")
-                        color: Theme.text
-                        font.features: { "tnum": 1 }
-                    }
-                    Label { visible: Buyer.bookUpdated !== ""; text: qsTr("at %1").arg(Buyer.bookUpdated); color: Theme.muted }
-                    Item { Layout.fillWidth: true }
-                    Button { text: qsTr("Refresh"); Accessible.name: qsTr("Refresh best ask"); enabled: !Buyer.previewLoading; onClicked: Buyer.refreshBestAsk() }
-                }
-                Label {
-                    text: Buyer.marketSpread ? qsTr("Current bid–ask gap: %1").arg(Buyer.marketSpread) : ""
-                    visible: text.length > 0
-                    color: Theme.muted
-                }
-                RowLayout {
-                    Layout.fillWidth: true
-                    visible: window.unlocked
-                    Label { text: qsTr("Available AUD"); color: Theme.muted }
-                    Label { text: Buyer.availableAud ? "A$" + window.money(Buyer.availableAud) : qsTr("Unavailable"); color: Theme.text; font.features: { "tnum": 1 } }
-                    Label { visible: Buyer.balanceUpdated !== ""; text: qsTr("at %1").arg(Buyer.balanceUpdated); color: Theme.muted }
-                    Item { Layout.fillWidth: true }
-                    Button { text: qsTr("Refresh"); Accessible.name: qsTr("Refresh available AUD"); enabled: Buyer.readKeyVerified && !Buyer.busy; onClicked: Buyer.refreshBalance() }
-                }
-                Label {
-                    Layout.fillWidth: true
-                    visible: window.unlocked && !Buyer.availableAud
-                    text: Buyer.readKeyVerified
-                          ? qsTr("Balance unavailable: CoinSpot did not return a usable balance. Refresh to retry.")
-                          : qsTr("Verify a Read Only API key to see your balance.")
-                    color: Theme.muted
-                    wrapMode: Text.Wrap
-                }
+                Label { visible: Buyer.marketSpread !== ""; text: qsTr("gap %1").arg(Buyer.marketSpread); color: Theme.muted }
+                Item { Layout.fillWidth: true }
+                Label { visible: Buyer.bookUpdated !== ""; text: Buyer.bookUpdated; color: Theme.muted; font.features: { "tnum": 1 } }
             }
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.leftMargin: 28
-                Layout.rightMargin: 28
-                implicitHeight: 1
-                color: Theme.border
-            }
+            Rectangle { Layout.fillWidth: true; Layout.leftMargin: 28; Layout.rightMargin: 28; implicitHeight: 1; color: Theme.border }
+
+            // Locked: one action instead of the buy form.
             ColumnLayout {
                 Layout.fillWidth: true
                 Layout.leftMargin: 28
@@ -502,110 +455,202 @@ ApplicationWindow {
                     wrapMode: Text.Wrap
                 }
             }
+
+            // Problems that need attention, each with its action.
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.leftMargin: 28
+                Layout.rightMargin: 28
+                visible: window.unlocked && (Buyer.journalProblem || Buyer.journalUnsaved || Buyer.uncertainBuy || window.saveWhenVerified || window.saveSkipped)
+                implicitHeight: problems.implicitHeight + 20
+                radius: 4
+                color: Theme.surface
+                border.color: Theme.accent
+                ColumnLayout {
+                    id: problems
+                    anchors { left: parent.left; right: parent.right; top: parent.top; margins: 10 }
+                    spacing: 8
+                    Label {
+                        Layout.fillWidth: true
+                        visible: window.saveWhenVerified || window.saveSkipped
+                        text: window.saveWhenVerified
+                              ? qsTr("The new keys will be offered for saving once CoinSpot verifies both.")
+                              : qsTr("The new keys were not saved because CoinSpot did not verify both. Any saved key file is unchanged.")
+                        color: Theme.text
+                        wrapMode: Text.Wrap
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        visible: Buyer.journalProblem
+                        text: qsTr("The local order journal cannot be read, so buying is blocked. Back up and inspect this file: %1. Restore a valid copy, or check CoinSpot's open and completed orders, move the damaged file aside, and reopen PlainBuy. An unknown earlier buy may have succeeded.").arg(Buyer.journalPath)
+                        color: Theme.text
+                        wrapMode: Text.Wrap
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        visible: Buyer.journalUnsaved
+                        text: qsTr("The latest order update is not saved in the local order journal (%1). New buys are blocked until it is saved.").arg(Buyer.journalPath)
+                        color: Theme.text
+                        wrapMode: Text.Wrap
+                    }
+                    Button {
+                        visible: Buyer.journalUnsaved
+                        text: qsTr("Retry saving")
+                        onClicked: Buyer.retrySaveJournal()
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        visible: Buyer.uncertainBuy
+                        text: qsTr("A previous buy request has an unknown outcome. New buys are blocked until you refresh orders, check CoinSpot, and acknowledge the risk of a duplicate.")
+                        color: Theme.text
+                        wrapMode: Text.Wrap
+                    }
+                    RowLayout {
+                        visible: Buyer.uncertainBuy
+                        Button {
+                            text: qsTr("Refresh to review")
+                            enabled: Buyer.readKeyVerified && !Buyer.busy
+                            onClicked: Buyer.reviewUncertainBuy()
+                        }
+                        Button {
+                            text: qsTr("Acknowledge…")
+                            enabled: Buyer.uncertainRefreshed && !Buyer.busy
+                            onClicked: acknowledgeDialog.open()
+                        }
+                    }
+                }
+            }
+
+            // Buy: a one-line summary while both values are automatic, the fields otherwise.
             ColumnLayout {
                 Layout.fillWidth: true
                 Layout.leftMargin: 28
                 Layout.rightMargin: 28
                 visible: window.unlocked
-                spacing: 10
-                Label { text: qsTr("Spend"); color: Theme.text; font.weight: Font.DemiBold }
-                TextField {
-                    id: amountField
-                    objectName: "amountField"
+                spacing: 8
+                Label {
                     Layout.fillWidth: true
-                    enabled: !Buyer.previewLoading && !Buyer.busy
-                    placeholderText: qsTr("AUD")
-                    inputMethodHints: Qt.ImhFormattedNumbersOnly
+                    text: Buyer.availableAud
+                          ? qsTr("Available A$%1 · %2").arg(window.money(Buyer.availableAud)).arg(Buyer.balanceUpdated)
+                          : Buyer.readKeyVerified ? qsTr("Balance unavailable; it is retried automatically.") : qsTr("Balance loads once your keys are verified.")
+                    color: Theme.muted
                     font.features: { "tnum": 1 }
-                    Accessible.name: qsTr("Australian dollars to spend, including the fee")
-                    onTextEdited: {
-                        window.amountAuto = false
-                        if (window.priceAuto) priceField.text = Buyer.marketPriceFor(text)
-                    }
-                    onAccepted: if (buyButton.enabled) buyButton.clicked()
+                    wrapMode: Text.Wrap
                 }
-                RowLayout {
+                ColumnLayout {
                     Layout.fillWidth: true
+                    visible: !window.editing
+                    spacing: 2
                     Label {
                         Layout.fillWidth: true
-                        text: window.amountAuto
-                              ? (Buyer.availableAud ? qsTr("All available AUD, including the 0.1% fee.") : qsTr("Fills in with your available AUD once the balance loads."))
-                              : qsTr("Custom amount, including the 0.1% fee.")
-                        color: Theme.muted
+                        text: Buyer.spendableAud && Number(Buyer.spendableAud) > 0
+                              ? qsTr("Spend all <b>A$%1</b>").arg(window.money(Buyer.spendableAud))
+                              : Buyer.spendableAud ? qsTr("No AUD available to spend") : qsTr("Waiting for your balance…")
+                        textFormat: Text.StyledText
+                        color: Theme.text
+                        font.pointSize: Theme.fontSize * 1.35
+                        font.features: { "tnum": 1 }
                         wrapMode: Text.Wrap
                     }
-                    Button {
-                        visible: !window.amountAuto
-                        flat: true
-                        text: qsTr("Use all AUD")
-                        onClicked: { window.amountAuto = true; window.applyAuto() }
-                    }
-                }
-                Label { text: qsTr("Price per BTC, at most"); color: Theme.text; font.weight: Font.DemiBold }
-                TextField {
-                    id: priceField
-                    objectName: "priceField"
-                    Layout.fillWidth: true
-                    enabled: !Buyer.previewLoading && !Buyer.busy
-                    placeholderText: qsTr("AUD per BTC")
-                    inputMethodHints: Qt.ImhFormattedNumbersOnly
-                    font.features: { "tnum": 1 }
-                    Accessible.name: qsTr("Maximum price per Bitcoin in Australian dollars")
-                    onTextEdited: window.priceAuto = false
-                    onAccepted: if (buyButton.enabled) buyButton.clicked()
-                }
-                RowLayout {
-                    Layout.fillWidth: true
                     Label {
                         Layout.fillWidth: true
-                        text: window.priceAuto
-                              ? qsTr("Current price: the lowest sell orders that cover this amount. Updated again when you buy.")
-                              : qsTr("Custom price. Below the current ask, the order may stay open.")
-                        color: Theme.muted
+                        text: priceField.text
+                              ? qsTr("at up to <b>A$%1</b> per BTC, the current price").arg(window.money(priceField.text))
+                              : qsTr("at the current price (loading…)")
+                        textFormat: Text.StyledText
+                        color: Theme.text
+                        font.features: { "tnum": 1 }
                         wrapMode: Text.Wrap
                     }
-                    Button {
-                        visible: !window.priceAuto
-                        flat: true
-                        text: qsTr("Use current price")
-                        onClicked: { window.priceAuto = true; window.applyAuto() }
+                }
+                GridLayout {
+                    Layout.fillWidth: true
+                    visible: window.editing
+                    columns: 2
+                    columnSpacing: 10
+                    rowSpacing: 4
+                    Label { text: qsTr("Spend (A$)"); color: Theme.text; font.weight: Font.DemiBold }
+                    TextField {
+                        id: amountField
+                        objectName: "amountField"
+                        Layout.fillWidth: true
+                        enabled: !Buyer.previewLoading && !Buyer.busy
+                        placeholderText: qsTr("AUD, fee included")
+                        inputMethodHints: Qt.ImhFormattedNumbersOnly
+                        font.features: { "tnum": 1 }
+                        Accessible.name: qsTr("Australian dollars to spend, including the fee")
+                        onTextEdited: {
+                            window.amountAuto = false
+                            if (window.priceAuto) priceField.text = Buyer.marketPriceFor(text)
+                        }
+                        onAccepted: if (buyButton.enabled) buyButton.clicked()
+                    }
+                    Item { implicitWidth: 1 }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Label { Layout.fillWidth: true; text: window.amountAuto ? qsTr("Using available balance") : qsTr("Custom amount"); color: Theme.muted }
+                        Button { visible: !window.amountAuto; flat: true; text: qsTr("Use all AUD"); onClicked: { window.amountAuto = true; window.applyAuto() } }
+                    }
+                    Label { text: qsTr("Max price (A$)"); color: Theme.text; font.weight: Font.DemiBold }
+                    TextField {
+                        id: priceField
+                        objectName: "priceField"
+                        Layout.fillWidth: true
+                        enabled: !Buyer.previewLoading && !Buyer.busy
+                        placeholderText: qsTr("per BTC")
+                        inputMethodHints: Qt.ImhFormattedNumbersOnly
+                        font.features: { "tnum": 1 }
+                        Accessible.name: qsTr("Maximum price per Bitcoin in Australian dollars")
+                        onTextEdited: window.priceAuto = false
+                        onAccepted: if (buyButton.enabled) buyButton.clicked()
+                    }
+                    Item { implicitWidth: 1 }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Label {
+                            Layout.fillWidth: true
+                            text: window.priceAuto ? qsTr("Using current order-book price") : qsTr("Custom price")
+                            color: Theme.muted
+                            ToolTip.visible: priceHint.hovered
+                            ToolTip.text: window.priceAuto
+                                          ? qsTr("The lowest sell orders that cover this amount, rounded up to the cent. Recalculated when you review the buy.")
+                                          : qsTr("If this is below the current ask, the order may stay open until a seller matches it.")
+                            HoverHandler { id: priceHint }
+                        }
+                        Button { visible: !window.priceAuto; flat: true; text: qsTr("Use current price"); onClicked: { window.priceAuto = true; window.applyAuto() } }
                     }
                 }
                 Label {
                     Layout.fillWidth: true
-                    Layout.topMargin: 4
-                    text: window.quote.valid || window.quote.btc !== undefined
-                          ? qsTr("≈ %1 BTC · A$%2 + A$%3 fee").arg(window.btc(window.quote.btc)).arg(window.money(window.quote.tradeValue)).arg(window.money(window.quote.fee))
+                    text: window.quote.btc !== undefined
+                          ? qsTr("Order %1 BTC · fee up to A$%2").arg(window.btc(window.quote.btc)).arg(window.money(window.quote.fee))
                             + (window.quote.askKnown ? (window.quote.reachesAsk ? qsTr(" · should fill straight away") : qsTr(" · below the ask; may stay open")) : "")
                           : ""
                     visible: text.length > 0
-                    color: Theme.text
+                    color: Theme.muted
                     font.features: { "tnum": 1 }
                     wrapMode: Text.Wrap
                 }
                 Button {
                     id: buyButton
                     objectName: "buyButton"
-                    text: Buyer.previewLoading ? qsTr("Checking price…")
-                        : Buyer.busy ? qsTr("Submitting…")
-                        : window.quote.valid ? qsTr("Buy ≈ %1 BTC").arg(window.btc(window.quote.btc))
-                        : qsTr("Buy BTC")
+                    Layout.fillWidth: true
+                    Layout.topMargin: 4
+                    text: Buyer.previewLoading ? qsTr("Checking price…") : Buyer.busy ? qsTr("Submitting…") : qsTr("Review buy")
                     enabled: Buyer.buyBlockedReason === "" && window.quote.valid && !Buyer.busy && !Buyer.previewLoading
-                    Layout.alignment: Qt.AlignLeft
                     onClicked: Buyer.prepare(amountField.text, priceField.text, window.priceAuto)
                     Accessible.name: text
                     contentItem: Label {
                         text: buyButton.text
                         color: Theme.onAccent
                         font.weight: Font.DemiBold
-                        font.features: { "tnum": 1 }
+                        font.pointSize: Theme.fontSize * 1.15
                         horizontalAlignment: Text.AlignHCenter
                         verticalAlignment: Text.AlignVCenter
                     }
                     background: Rectangle {
-                        implicitWidth: 112
-                        implicitHeight: 34
-                        radius: 3
+                        implicitHeight: 48
+                        radius: 4
                         opacity: buyButton.enabled ? 1 : 0.45
                         color: buyButton.down ? Qt.darker(Theme.accent, 1.15) : Theme.accent
                         border.width: buyButton.visualFocus ? 2 : 0
@@ -616,48 +661,22 @@ ApplicationWindow {
                     Layout.fillWidth: true
                     text: Buyer.busy || Buyer.previewLoading ? "" : Buyer.buyBlockedReason || (window.quote.valid ? "" : window.quote.error || "")
                     visible: text.length > 0
-                    color: Theme.muted
+                    color: Theme.text
                     wrapMode: Text.Wrap
-                }
-                Label {
-                    Layout.fillWidth: true
-                    visible: Buyer.journalProblem
-                    text: qsTr("The local order journal cannot be read, so buying is blocked. Back up and inspect this file: %1. Restore a valid copy, or check CoinSpot's open and completed orders, move the damaged file aside, and reopen PlainBuy. An unknown earlier buy may have succeeded.").arg(Buyer.journalPath)
-                    color: Theme.text
-                    wrapMode: Text.WrapAnywhere
-                }
-                Label {
-                    Layout.fillWidth: true
-                    visible: Buyer.journalUnsaved
-                    text: qsTr("The latest order update is not saved in the local order journal (%1). New buys are blocked until it is saved.").arg(Buyer.journalPath)
-                    color: Theme.text
-                    wrapMode: Text.WrapAnywhere
                 }
                 Button {
-                    visible: Buyer.journalUnsaved
-                    text: qsTr("Retry saving")
-                    onClicked: Buyer.retrySaveJournal()
-                    Accessible.name: text
-                }
-                Label {
-                    Layout.fillWidth: true
-                    visible: Buyer.uncertainBuy
-                    text: qsTr("A previous buy request has an unknown outcome. New buys are blocked until you refresh orders, check CoinSpot, and acknowledge the risk of a duplicate.")
-                    color: Theme.text
-                    wrapMode: Text.Wrap
-                }
-                RowLayout {
-                    Layout.fillWidth: true
-                    visible: Buyer.uncertainBuy
-                    Button {
-                        text: qsTr("Refresh to review")
-                        enabled: Buyer.readKeyVerified && !Buyer.busy
-                        onClicked: Buyer.reviewUncertainBuy()
-                    }
-                    Button {
-                        text: qsTr("Acknowledge…")
-                        enabled: Buyer.uncertainRefreshed && !Buyer.busy
-                        onClicked: acknowledgeDialog.open()
+                    flat: true
+                    text: window.editing ? qsTr("Use all AUD at the current price") : qsTr("Change amount or price")
+                    enabled: !Buyer.busy && !Buyer.previewLoading
+                    onClicked: {
+                        if (window.editing) {
+                            window.amountAuto = true
+                            window.priceAuto = true
+                            window.editOpen = false
+                            window.applyAuto()
+                        } else {
+                            window.editOpen = true
+                        }
                     }
                 }
                 Label {
@@ -668,6 +687,8 @@ ApplicationWindow {
                     wrapMode: Text.Wrap
                 }
             }
+
+            // Orders: below the buy section; history starts collapsed.
             Rectangle { visible: window.unlocked; Layout.fillWidth: true; Layout.leftMargin: 28; Layout.rightMargin: 28; implicitHeight: 1; color: Theme.border }
             ColumnLayout {
                 Layout.fillWidth: true
@@ -675,16 +696,11 @@ ApplicationWindow {
                 Layout.rightMargin: 28
                 visible: window.unlocked
                 spacing: 8
-                RowLayout {
-                    Layout.fillWidth: true
-                    Label { text: qsTr("Open BTC buy orders"); color: Theme.text; font.weight: Font.DemiBold }
-                    Item { Layout.fillWidth: true }
-                    Button { text: qsTr("Refresh orders"); enabled: Buyer.readKeyVerified; onClicked: Buyer.refreshOrderStatus() }
-                }
+                Label { text: qsTr("Open BTC buy orders"); color: Theme.text; font.weight: Font.DemiBold }
                 Label {
                     Layout.fillWidth: true
-                    visible: Buyer.readKeyVerified && Buyer.openOrders.length === 0
-                    text: Buyer.ordersLoaded ? qsTr("No open BTC buy orders.") : qsTr("Open orders unavailable. Refresh to try again.")
+                    visible: Buyer.openOrders.length === 0
+                    text: Buyer.ordersLoaded ? qsTr("None.") : qsTr("Not loaded yet; checked every 15 seconds.")
                     color: Theme.muted
                     wrapMode: Text.Wrap
                 }
@@ -695,7 +711,7 @@ ApplicationWindow {
                         Layout.fillWidth: true
                         Label {
                             Layout.fillWidth: true
-                            text: qsTr("%1 BTC at A$%2\nID: %3").arg(Number(modelData.amount).toFixed(8)).arg(Number(modelData.rate).toFixed(2)).arg(modelData.id)
+                            text: qsTr("%1 BTC at A$%2\nID: %3").arg(Number(modelData.amount).toFixed(8)).arg(window.money(modelData.rate)).arg(modelData.id)
                             color: Theme.text
                             wrapMode: Text.WrapAnywhere
                         }
@@ -706,28 +722,27 @@ ApplicationWindow {
                         }
                     }
                 }
-                Label {
-                    Layout.topMargin: 9
-                    text: qsTr("Orders placed with PlainBuy")
-                    color: Theme.text
-                    font.weight: Font.DemiBold
+                Button {
+                    Layout.topMargin: 4
+                    flat: true
+                    text: (window.historyOpen ? "▾ " : "▸ ") + qsTr("Orders placed with PlainBuy (%1)").arg(Buyer.orderHistory.length)
+                    onClicked: window.historyOpen = !window.historyOpen
                 }
-                Label { visible: Buyer.orderHistory.length === 0; text: qsTr("No locally recorded orders yet."); color: Theme.muted }
                 Repeater {
-                    model: Buyer.orderHistory
+                    model: window.historyOpen ? Buyer.orderHistory : []
                     Label {
                         required property var modelData
                         Layout.fillWidth: true
-                        text: qsTr("%1 BTC at A$%2 · %3\n%4").arg(Number(modelData.amount).toFixed(8)).arg(Number(modelData.rate).toFixed(2)).arg(modelData.state).arg(modelData.id ? qsTr("ID: %1").arg(modelData.id) : qsTr("No order ID returned"))
-                              + (modelData.filledBtc !== undefined ? qsTr("\nFilled: %1 BTC · average execution: A$%2/BTC").arg(Number(modelData.filledBtc).toFixed(8)).arg(Number(modelData.averageFillPrice).toFixed(2)) : "")
-                              + (modelData.reportedTradeTotalAud !== undefined ? qsTr("\nCoinSpot trade total: A$%1").arg(Number(modelData.reportedTradeTotalAud).toFixed(2)) : "")
-                              + (modelData.reportedFeeAud !== undefined ? qsTr(" · reported AUD fee incl. GST: A$%1").arg(Number(modelData.reportedFeeAud).toFixed(2)) : "")
+                        text: qsTr("%1 · %2 BTC at A$%3 · %4\n%5").arg(modelData.date || "").arg(Number(modelData.amount).toFixed(8)).arg(window.money(modelData.rate)).arg(modelData.state).arg(modelData.id ? qsTr("ID: %1").arg(modelData.id) : qsTr("No order ID returned"))
+                              + (modelData.filledBtc !== undefined ? qsTr("\nFilled: %1 BTC · average execution: A$%2/BTC").arg(Number(modelData.filledBtc).toFixed(8)).arg(window.money(modelData.averageFillPrice)) : "")
+                              + (modelData.reportedTradeTotalAud !== undefined ? qsTr("\nCoinSpot trade total: A$%1").arg(window.money(modelData.reportedTradeTotalAud)) : "")
+                              + (modelData.reportedFeeAud !== undefined ? qsTr(" · reported AUD fee incl. GST: A$%1").arg(window.money(modelData.reportedFeeAud)) : "")
                         color: Theme.muted
-                        wrapMode: Text.WrapAnywhere
+                        wrapMode: Text.Wrap
                     }
                 }
             }
-            Item { Layout.preferredHeight: 4 }
+            Item { Layout.preferredHeight: 6 }
         }
     }
 }

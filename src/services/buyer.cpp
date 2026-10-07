@@ -404,7 +404,7 @@ QString Buyer::buyBlockedReason() const {
     return m_hasSavedCredentials && !connected() ? QStringLiteral("Unlock your saved API keys to buy.")
                                                  : QStringLiteral("Add your CoinSpot API keys to buy.");
   if (m_fullKeyStatus == QLatin1String("Rejected by CoinSpot") || m_readKeyStatus == QLatin1String("Rejected by CoinSpot"))
-    return QStringLiteral("CoinSpot rejected an API key. Use Set keys… to enter new keys.");
+    return QStringLiteral("CoinSpot rejected an API key. Use Account → Enter API keys to replace them.");
   if (m_fullKeyStatus == QLatin1String("Could not verify; retry") || m_readKeyStatus == QLatin1String("Could not verify; retry"))
     return QStringLiteral("Could not reach CoinSpot to verify the API keys. Use Account → Retry API checks.");
   if (!keysVerified()) return QStringLiteral("Waiting for CoinSpot to verify both API keys.");
@@ -678,7 +678,7 @@ void Buyer::placePreparedOrder() {
         break;
       }
       saveOrders();
-      setStatus(QStringLiteral("Buy request outcome unknown. Refresh orders and review CoinSpot before another buy."));
+      setStatus(QStringLiteral("Buy request outcome unknown. Use Refresh to review below and check CoinSpot before another buy."));
     }
     reply->deleteLater();
   });
