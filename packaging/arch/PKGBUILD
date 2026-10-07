@@ -9,20 +9,20 @@ license=('MIT')
 depends=('glibc' 'hicolor-icon-theme' 'libgcc' 'libstdc++' 'libsodium' 'qt6-base' 'qt6-declarative')
 makedepends=('cmake' 'ninja' 'pkgconf')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('SKIP')
+sha256sums=('01143ee878e6dfde33d5b8aaae323a533a0988a5f17ee68ec5a5d4adaeb8b9c8')
 
 build() {
-  cmake -B build -S "$pkgname-$pkgver" -G Ninja \
+  cmake -B "build-$pkgver" -S "$pkgname-$pkgver" -G Ninja \
     -DCMAKE_BUILD_TYPE=None \
     -DCMAKE_INSTALL_PREFIX=/usr \
     -DPLAINBUY_BUILD_TESTS=ON
-  cmake --build build
+  cmake --build "build-$pkgver"
 }
 
 check() {
-  ctest --test-dir build --output-on-failure
+  ctest --test-dir "build-$pkgver" --output-on-failure
 }
 
 package() {
-  DESTDIR="$pkgdir" cmake --install build
+  DESTDIR="$pkgdir" cmake --install "build-$pkgver"
 }
