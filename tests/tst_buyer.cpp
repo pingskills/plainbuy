@@ -102,6 +102,34 @@ private slots:
     QCOMPARE(QFile::permissions(dir.path() + "/private") &
                  (QFileDevice::ReadGroup | QFileDevice::ReadOther), QFileDevice::Permissions{});
   }
+  void damagedJournalBlocksBuying() {
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QByteArray oldDataHome = qgetenv("XDG_DATA_HOME");
+    qputenv("XDG_DATA_HOME", dir.path().toUtf8());
+    const QByteArray key("damaged-journal-test-key");
+    const QString path = pb::OrderStore::pathForKey(key);
+    bool missingOkay = false;
+    QVERIFY(pb::OrderStore::load(path, &missingOkay).isEmpty());
+    QVERIFY(missingOkay);
+    QVERIFY(pb::OrderStore::save(path, {}));
+    QFile file(path);
+    QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    QCOMPARE(file.write("{damaged", 8), 8);
+    file.close();
+    bool okay = true;
+    QVERIFY(pb::OrderStore::load(path, &okay).isEmpty());
+    QVERIFY(!okay);
+    {
+      pb::Buyer buyer;
+      buyer.setCredentials(QString::fromUtf8(key), "secret");
+      QVERIFY(buyer.journalProblem());
+      QCOMPARE(buyer.journalPath(), path);
+      QVERIFY(!buyer.prepare("100", "100000"));
+    }
+    if (oldDataHome.isNull()) qunsetenv("XDG_DATA_HOME");
+    else qputenv("XDG_DATA_HOME", oldDataHome);
+  }
   void encryptedCredentialsRoundTrip() {
     QTemporaryDir dir;
     QVERIFY(dir.isValid());

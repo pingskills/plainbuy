@@ -33,6 +33,8 @@ class Buyer : public QObject {
   Q_PROPERTY(bool ordersLoaded READ ordersLoaded NOTIFY changed)
   Q_PROPERTY(bool uncertainBuy READ uncertainBuy NOTIFY changed)
   Q_PROPERTY(bool uncertainRefreshed READ uncertainRefreshed NOTIFY changed)
+  Q_PROPERTY(bool journalProblem READ journalProblem NOTIFY changed)
+  Q_PROPERTY(QString journalPath READ journalPath NOTIFY changed)
   Q_PROPERTY(QString version READ version CONSTANT)
 public:
   explicit Buyer(QObject *parent = nullptr);
@@ -58,6 +60,8 @@ public:
   bool ordersLoaded() const { return m_ordersLoaded; }
   bool uncertainBuy() const { return m_uncertainBuy; }
   bool uncertainRefreshed() const { return m_uncertainRefreshed; }
+  bool journalProblem() const { return m_journalProblem; }
+  QString journalPath() const { return m_orderPath; }
   QString version() const;
   Q_INVOKABLE void setCredentials(const QString &key, const QString &secret);
   Q_INVOKABLE void setReadOnlyCredentials(const QString &key, const QString &secret);
@@ -113,6 +117,7 @@ private:
   bool m_ordersLoaded = false;
   bool m_uncertainBuy = false;
   bool m_uncertainRefreshed = false;
+  bool m_journalProblem = false;
   bool m_reviewRequested = false;
   double m_budget = 0;
   double m_maxPrice = 0;

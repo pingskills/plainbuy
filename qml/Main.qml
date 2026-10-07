@@ -326,7 +326,7 @@ ApplicationWindow {
                     id: buyButton
                     objectName: "buyButton"
                     text: Buyer.busy ? qsTr("Submitting…") : qsTr("Buy BTC")
-                    enabled: Buyer.keysVerified && !Buyer.busy && !Buyer.uncertainBuy
+                    enabled: Buyer.keysVerified && !Buyer.busy && !Buyer.uncertainBuy && !Buyer.journalProblem
                     Layout.alignment: Qt.AlignLeft
                     onClicked: if (Buyer.prepare(amountField.text, priceField.text)) confirmDialog.open()
                     Accessible.name: text
@@ -347,6 +347,13 @@ ApplicationWindow {
                     }
                 }
                 Label { Layout.fillWidth: true; text: qsTr("Places a CoinSpot Markets buy. Check open orders before placing another."); color: Theme.muted; wrapMode: Text.Wrap }
+                Label {
+                    Layout.fillWidth: true
+                    visible: Buyer.journalProblem
+                    text: qsTr("The local order journal cannot be read, so buying is blocked. Back up and inspect this file: %1. Restore a valid copy, or check CoinSpot's open and completed orders, move the damaged file aside, and reopen PlainBuy. An unknown earlier buy may have succeeded.").arg(Buyer.journalPath)
+                    color: Theme.text
+                    wrapMode: Text.WrapAnywhere
+                }
                 Label {
                     Layout.fillWidth: true
                     visible: Buyer.uncertainBuy

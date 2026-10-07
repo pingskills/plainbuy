@@ -40,4 +40,6 @@ An open order has a **Cancel** button. Confirming sends CoinSpot a cancellation 
 
 Before sending a buy request, PlainBuy saves a pending attempt to the local journal. If the request times out, returns an unclear response, or the app exits before a response arrives, another buy is blocked after restart. Use **Refresh to review** to load both open and completed orders, inspect the results in CoinSpot, then explicitly acknowledge that the earlier buy may have succeeded. The acknowledgement is saved before the app allows another buy. PlainBuy cannot automatically reconcile an attempt that never returned an order ID, and it never retries a buy automatically. This guard is tied to the Full Access API key used for the attempt; use the same key when reviewing it.
 
+If the journal exists but is damaged or unreadable, PlainBuy blocks buying and shows its path. Back up the file first. Restore a valid copy if you have one. If it cannot be restored, review CoinSpot's open and completed orders, move the damaged file aside, and restart PlainBuy. A missing journal is treated as a fresh start only after the file has been deliberately moved or removed.
+
 CoinSpot fees and API behavior can change. Refer to [CoinSpot fees](https://www.coinspot.com.au/fees) and [API V2 documentation](https://www.coinspot.com.au/v2/api).

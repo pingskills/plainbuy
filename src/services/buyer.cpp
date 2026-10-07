@@ -140,6 +140,7 @@ void Buyer::loadOrders() {
   m_orders = {};
   m_openOrders = {};
   m_ordersLoaded = false;
+  m_journalProblem = false;
   m_uncertainBuy = false;
   m_uncertainRefreshed = false;
   m_reviewRequested = false;
@@ -147,7 +148,9 @@ void Buyer::loadOrders() {
   m_lastOrderAmount = 0;
   if (!connected()) { emit changed(); return; }
   m_orderPath = OrderStore::pathForKey(m_key);
-  m_orders = OrderStore::load(m_orderPath);
+  bool journalOkay = false;
+  m_orders = OrderStore::load(m_orderPath, &journalOkay);
+  if (!journalOkay) m_journalProblem = true;
   for (const auto &entry : m_orders)
     if (entry.toObject().value(QStringLiteral("pending")).toBool()) m_uncertainBuy = true;
   if (!m_orders.isEmpty()) {
@@ -241,6 +244,7 @@ void Buyer::clearCredentials() {
   m_lastOrderId.clear(); m_lastOrderDate.clear(); m_orderState.clear();
   m_orders = {}; m_openOrders = {}; m_orderPath.clear();
   m_ordersLoaded = false;
+  m_journalProblem = false;
   m_uncertainBuy = false; m_uncertainRefreshed = false; m_reviewRequested = false;
   setStatus(QStringLiteral("API key cleared"));
 }
@@ -373,6 +377,7 @@ void Buyer::fetchBook(double budget) {
 
 bool Buyer::prepare(const QString &aud, const QString &maxPrice) {
   if (m_busy) { setStatus(QStringLiteral("An order request is already in progress")); return false; }
+  if (m_journalProblem) { setStatus(QStringLiteral("The local order journal is unreadable. Buying is blocked; check the journal warning below.")); return false; }
   if (m_uncertainBuy) { setStatus(QStringLiteral("Review and acknowledge the uncertain buy request before placing another order.")); return false; }
   if (!connected()) { setStatus(QStringLiteral("Add your CoinSpot API key first")); return false; }
   if (!readOnlyReady()) { setStatus(QStringLiteral("Add a read-only API key for the balance check first")); return false; }
@@ -438,7 +443,7 @@ void Buyer::refreshBalance() {
 }
 
 void Buyer::submit() {
-  if (m_busy || m_uncertainBuy || !keysVerified() || m_amount <= 0) return;
+  if (m_busy || m_journalProblem || m_uncertainBuy || !keysVerified() || m_amount <= 0) return;
   m_busy = true;
   setStatus(QStringLiteral("Checking available AUD…"));
   auto *reply = postPrivate(QStringLiteral("ro/my/balance/AUD?available=yes"), {}, true);
