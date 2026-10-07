@@ -37,6 +37,7 @@ ApplicationWindow {
             title: qsTr("&Account")
             Action { text: qsTr("&Enter API keys…"); onTriggered: credentialsDialog.open() }
             Action { text: qsTr("Set &Read Only key…"); enabled: Buyer.connected && !Buyer.busy; onTriggered: readOnlyDialog.open() }
+            Action { text: qsTr("&Retry API checks"); enabled: (Buyer.connected || Buyer.readOnlyReady) && !Buyer.busy; onTriggered: Buyer.validateKeys() }
             Action { text: qsTr("&Unlock encrypted file…"); enabled: Buyer.hasSavedCredentials && !Buyer.busy; onTriggered: unlockDialog.open() }
             Action { text: qsTr("&Save encrypted file…"); enabled: Buyer.connected && Buyer.readOnlyReady && !Buyer.busy; onTriggered: saveDialog.open() }
             Action { text: qsTr("&Remove encrypted file"); enabled: Buyer.hasSavedCredentials && !Buyer.busy; onTriggered: Buyer.forgetSavedCredentials() }
@@ -246,11 +247,17 @@ ApplicationWindow {
                     Layout.fillWidth: true
                     Label { text: qsTr("BTC / AUD"); color: Theme.muted; font.letterSpacing: 1.4 }
                     Item { Layout.fillWidth: true }
-                    Label { text: Buyer.connected && Buyer.readOnlyReady ? qsTr("Keys ready") : Buyer.hasSavedCredentials && !Buyer.connected ? qsTr("Locked") : qsTr("Keys needed"); color: Theme.muted }
+                    Label { text: Buyer.keysVerified ? qsTr("Keys verified") : Buyer.hasSavedCredentials && !Buyer.connected ? qsTr("Locked") : qsTr("Keys not verified"); color: Theme.muted }
                     Button {
                         text: Buyer.hasSavedCredentials && !Buyer.connected ? qsTr("Unlock…") : qsTr("Set keys…")
                         onClicked: Buyer.hasSavedCredentials && !Buyer.connected ? unlockDialog.open() : credentialsDialog.open()
                     }
+                }
+                Label {
+                    Layout.fillWidth: true
+                    text: qsTr("Full Access: %1 · Read Only: %2").arg(Buyer.fullKeyStatus).arg(Buyer.readKeyStatus)
+                    color: Theme.muted
+                    wrapMode: Text.Wrap
                 }
                 RowLayout {
                     Layout.fillWidth: true
@@ -273,7 +280,7 @@ ApplicationWindow {
                     Label { text: qsTr("Available AUD"); color: Theme.muted }
                     Label { text: Buyer.availableAud ? "A$" + Buyer.availableAud : qsTr("Unavailable"); color: Theme.text }
                     Item { Layout.fillWidth: true }
-                    Button { text: qsTr("Refresh"); enabled: Buyer.readOnlyReady && !Buyer.busy; onClicked: Buyer.refreshBalance() }
+                    Button { text: qsTr("Refresh"); enabled: Buyer.readKeyVerified && !Buyer.busy; onClicked: Buyer.refreshBalance() }
                 }
             }
             Rectangle {
@@ -319,7 +326,7 @@ ApplicationWindow {
                     id: buyButton
                     objectName: "buyButton"
                     text: Buyer.busy ? qsTr("Submitting…") : qsTr("Buy BTC")
-                    enabled: !Buyer.busy && !Buyer.uncertainBuy
+                    enabled: Buyer.keysVerified && !Buyer.busy && !Buyer.uncertainBuy
                     Layout.alignment: Qt.AlignLeft
                     onClicked: if (Buyer.prepare(amountField.text, priceField.text)) confirmDialog.open()
                     Accessible.name: text
@@ -352,7 +359,7 @@ ApplicationWindow {
                     visible: Buyer.uncertainBuy
                     Button {
                         text: qsTr("Refresh to review")
-                        enabled: Buyer.readOnlyReady && !Buyer.busy
+                        enabled: Buyer.readKeyVerified && !Buyer.busy
                         onClicked: Buyer.reviewUncertainBuy()
                     }
                     Button {
@@ -379,11 +386,11 @@ ApplicationWindow {
                     Layout.fillWidth: true
                     Label { text: qsTr("Open BTC buy orders"); color: Theme.text; font.weight: Font.DemiBold }
                     Item { Layout.fillWidth: true }
-                    Button { text: qsTr("Refresh orders"); enabled: Buyer.readOnlyReady; onClicked: Buyer.refreshOrderStatus() }
+                    Button { text: qsTr("Refresh orders"); enabled: Buyer.readKeyVerified; onClicked: Buyer.refreshOrderStatus() }
                 }
                 Label {
                     Layout.fillWidth: true
-                    visible: Buyer.readOnlyReady && Buyer.openOrders.length === 0
+                    visible: Buyer.readKeyVerified && Buyer.openOrders.length === 0
                     text: Buyer.ordersLoaded ? qsTr("No open BTC buy orders.") : qsTr("Open orders unavailable. Refresh to try again.")
                     color: Theme.muted
                     wrapMode: Text.Wrap
@@ -401,7 +408,7 @@ ApplicationWindow {
                         }
                         Button {
                             text: qsTr("Cancel…")
-                            enabled: !Buyer.busy
+                            enabled: Buyer.keysVerified && !Buyer.busy
                             onClicked: { window.cancelOrderId = modelData.id; cancelDialog.open() }
                         }
                     }

@@ -14,6 +14,11 @@ class Buyer : public QObject {
   Q_OBJECT
   Q_PROPERTY(bool connected READ connected NOTIFY changed)
   Q_PROPERTY(bool readOnlyReady READ readOnlyReady NOTIFY changed)
+  Q_PROPERTY(bool keysVerified READ keysVerified NOTIFY changed)
+  Q_PROPERTY(bool fullKeyVerified READ fullKeyVerified NOTIFY changed)
+  Q_PROPERTY(bool readKeyVerified READ readKeyVerified NOTIFY changed)
+  Q_PROPERTY(QString fullKeyStatus READ fullKeyStatus NOTIFY changed)
+  Q_PROPERTY(QString readKeyStatus READ readKeyStatus NOTIFY changed)
   Q_PROPERTY(bool hasSavedCredentials READ hasSavedCredentials NOTIFY changed)
   Q_PROPERTY(bool busy READ busy NOTIFY changed)
   Q_PROPERTY(QString status READ status NOTIFY changed)
@@ -34,6 +39,11 @@ public:
   ~Buyer() override;
   bool connected() const { return !m_key.isEmpty() && !m_secret.isEmpty(); }
   bool readOnlyReady() const { return !m_readKey.isEmpty() && !m_readSecret.isEmpty(); }
+  bool keysVerified() const { return m_fullKeyVerified && m_readKeyVerified; }
+  bool fullKeyVerified() const { return m_fullKeyVerified; }
+  bool readKeyVerified() const { return m_readKeyVerified; }
+  QString fullKeyStatus() const { return m_fullKeyStatus; }
+  QString readKeyStatus() const { return m_readKeyStatus; }
   bool hasSavedCredentials() const { return m_hasSavedCredentials; }
   bool busy() const { return m_busy; }
   QString status() const { return m_status; }
@@ -52,6 +62,7 @@ public:
   Q_INVOKABLE void setCredentials(const QString &key, const QString &secret);
   Q_INVOKABLE void setReadOnlyCredentials(const QString &key, const QString &secret);
   Q_INVOKABLE void clearCredentials();
+  Q_INVOKABLE void validateKeys();
   Q_INVOKABLE void saveCredentials(const QString &passphrase, const QString &confirmation);
   Q_INVOKABLE void unlockCredentials(const QString &passphrase);
   Q_INVOKABLE void forgetSavedCredentials();
@@ -72,6 +83,7 @@ public:
                                const QJsonArray &completedOrders,
                                const QString &orderId, double requestedAmount);
   static QJsonObject fillSummary(const QJsonArray &completedOrders, const QString &orderId);
+  static bool apiStatusOkay(const QJsonObject &response);
 signals:
   void changed();
   void recommendedPriceChanged();
@@ -83,6 +95,8 @@ private:
   void loadOrders();
   void updateOrder(const QString &id, const QString &state, const QJsonObject &fills = {});
   void removeAttempt(const QString &attemptId);
+  void validateFullKey();
+  void validateReadKey();
   QNetworkAccessManager m_network;
   QByteArray m_key, m_secret, m_readKey, m_readSecret;
   qint64 m_nonce = 0;
@@ -90,6 +104,12 @@ private:
   bool m_busy = false;
   bool m_statusBusy = false;
   bool m_hasSavedCredentials = false;
+  bool m_fullKeyVerified = false;
+  bool m_readKeyVerified = false;
+  QString m_fullKeyStatus = QStringLiteral("Not entered");
+  QString m_readKeyStatus = QStringLiteral("Not entered");
+  quint64 m_fullValidationSerial = 0;
+  quint64 m_readValidationSerial = 0;
   bool m_ordersLoaded = false;
   bool m_uncertainBuy = false;
   bool m_uncertainRefreshed = false;

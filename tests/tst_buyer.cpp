@@ -17,6 +17,11 @@ private slots:
     QVERIFY(!pb::Buyer::parseMoney("-10", 2, &value));
     QVERIFY(!pb::Buyer::parseMoney("0", 2, &value));
   }
+  void recognisesKeyStatusResponses() {
+    QVERIFY(pb::Buyer::apiStatusOkay(QJsonObject{{"status", "ok"}}));
+    QVERIFY(!pb::Buyer::apiStatusOkay(QJsonObject{{"status", "error"}}));
+    QVERIFY(!pb::Buyer::apiStatusOkay(QJsonObject{}));
+  }
   void respectsBudget() {
     const double amount = pb::Buyer::coinAmount(100.0, 100000.0);
     QCOMPARE(amount, 0.001);

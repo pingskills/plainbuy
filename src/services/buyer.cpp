@@ -73,6 +73,68 @@ double Buyer::recommendedCap(QVector<AskLevel> asks, double audBudget) {
 
 void Buyer::setStatus(const QString &value) { m_status = value; emit changed(); }
 
+bool Buyer::apiStatusOkay(const QJsonObject &response) {
+  return response.value(QStringLiteral("status")).toString() == QLatin1String("ok");
+}
+
+void Buyer::validateFullKey() {
+  const quint64 serial = ++m_fullValidationSerial;
+  m_fullKeyVerified = false;
+  m_fullKeyStatus = connected() ? QStringLiteral("Checking…") : QStringLiteral("Not entered");
+  emit changed();
+  if (!connected()) return;
+  auto *reply = postPrivate(QStringLiteral("status"), {}, false);
+  connect(reply, &QNetworkReply::finished, this, [this, reply, serial] {
+    const QJsonObject response = QJsonDocument::fromJson(reply->readAll()).object();
+    if (serial == m_fullValidationSerial) {
+      m_fullKeyVerified = reply->error() == QNetworkReply::NoError && apiStatusOkay(response);
+      const int httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+      m_fullKeyStatus = m_fullKeyVerified ? QStringLiteral("Verified")
+          : response.value(QStringLiteral("status")).toString() == QLatin1String("error") ||
+            httpStatus == 401 || httpStatus == 403
+              ? QStringLiteral("Rejected by CoinSpot")
+              : QStringLiteral("Could not verify; retry");
+      emit changed();
+    }
+    reply->deleteLater();
+  });
+}
+
+void Buyer::validateReadKey() {
+  const quint64 serial = ++m_readValidationSerial;
+  m_readKeyVerified = false;
+  m_orderPoll.stop();
+  m_readKeyStatus = readOnlyReady() ? QStringLiteral("Checking…") : QStringLiteral("Not entered");
+  emit changed();
+  if (!readOnlyReady()) return;
+  auto *reply = postPrivate(QStringLiteral("ro/status"), {}, true);
+  connect(reply, &QNetworkReply::finished, this, [this, reply, serial] {
+    const QJsonObject response = QJsonDocument::fromJson(reply->readAll()).object();
+    if (serial == m_readValidationSerial) {
+      m_readKeyVerified = reply->error() == QNetworkReply::NoError && apiStatusOkay(response);
+      const int httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+      m_readKeyStatus = m_readKeyVerified ? QStringLiteral("Verified")
+          : response.value(QStringLiteral("status")).toString() == QLatin1String("error") ||
+            httpStatus == 401 || httpStatus == 403
+              ? QStringLiteral("Rejected by CoinSpot")
+              : QStringLiteral("Could not verify; retry");
+      emit changed();
+      if (m_readKeyVerified) {
+        m_orderPoll.start();
+        refreshBalance();
+        refreshOrderStatus();
+      }
+    }
+    reply->deleteLater();
+  });
+}
+
+void Buyer::validateKeys() {
+  if (m_busy) return;
+  validateFullKey();
+  validateReadKey();
+}
+
 void Buyer::loadOrders() {
   m_orderPath.clear();
   m_orders = {};
@@ -141,8 +203,9 @@ void Buyer::setCredentials(const QString &key, const QString &secret) {
   m_key = key.trimmed().toUtf8();
   m_secret = secret.trimmed().toUtf8();
   loadOrders();
-  setStatus(connected() ? QStringLiteral("API key ready for this session")
+  setStatus(connected() ? QStringLiteral("Checking Full Access API key…")
                         : QStringLiteral("Enter both API key and secret"));
+  validateFullKey();
 }
 
 void Buyer::setReadOnlyCredentials(const QString &key, const QString &secret) {
@@ -156,10 +219,9 @@ void Buyer::setReadOnlyCredentials(const QString &key, const QString &secret) {
   if (!m_readSecret.isEmpty()) sodium_memzero(m_readSecret.data(), static_cast<size_t>(m_readSecret.size()));
   m_readKey = key.trimmed().toUtf8();
   m_readSecret = secret.trimmed().toUtf8();
-  setStatus(readOnlyReady() ? QStringLiteral("Read-only API key ready")
+  setStatus(readOnlyReady() ? QStringLiteral("Checking Read Only API key…")
                             : QStringLiteral("Enter both read-only API key and secret"));
-  if (readOnlyReady()) refreshBalance();
-  if (readOnlyReady()) { m_orderPoll.start(); refreshOrderStatus(); }
+  validateReadKey();
 }
 
 void Buyer::clearCredentials() {
@@ -170,6 +232,10 @@ void Buyer::clearCredentials() {
   if (!m_readSecret.isEmpty()) sodium_memzero(m_readSecret.data(), static_cast<size_t>(m_readSecret.size()));
   m_key.clear(); m_secret.clear();
   m_readKey.clear(); m_readSecret.clear();
+  ++m_fullValidationSerial; ++m_readValidationSerial;
+  m_fullKeyVerified = false; m_readKeyVerified = false;
+  m_fullKeyStatus = QStringLiteral("Not entered");
+  m_readKeyStatus = QStringLiteral("Not entered");
   m_availableAud.clear();
   m_orderPoll.stop();
   m_lastOrderId.clear(); m_lastOrderDate.clear(); m_orderState.clear();
@@ -218,10 +284,9 @@ void Buyer::unlockCredentials(const QString &passphrase) {
   m_hasSavedCredentials = true;
   m_orderPoll.stop();
   loadOrders();
-  setStatus(readOnlyReady() ? QStringLiteral("Credentials unlocked for this session")
+  setStatus(readOnlyReady() ? QStringLiteral("Credentials unlocked; checking both API keys…")
                             : QStringLiteral("Trading key unlocked. Add a separate read-only key for balance and status checks."));
-  if (readOnlyReady()) refreshBalance();
-  if (readOnlyReady()) { m_orderPoll.start(); refreshOrderStatus(); }
+  validateKeys();
 }
 
 void Buyer::forgetSavedCredentials() {
@@ -311,6 +376,7 @@ bool Buyer::prepare(const QString &aud, const QString &maxPrice) {
   if (m_uncertainBuy) { setStatus(QStringLiteral("Review and acknowledge the uncertain buy request before placing another order.")); return false; }
   if (!connected()) { setStatus(QStringLiteral("Add your CoinSpot API key first")); return false; }
   if (!readOnlyReady()) { setStatus(QStringLiteral("Add a read-only API key for the balance check first")); return false; }
+  if (!keysVerified()) { setStatus(QStringLiteral("Verify both CoinSpot API keys before buying. Use Account → Retry API checks if needed.")); return false; }
   if (!parseMoney(aud, 2, &m_budget)) { setStatus(QStringLiteral("Enter an AUD amount with up to two decimals")); return false; }
   if (!parseMoney(maxPrice, 8, &m_maxPrice)) { setStatus(QStringLiteral("Enter a positive maximum BTC price in AUD")); return false; }
   m_amount = coinAmount(m_budget, m_maxPrice);
@@ -354,10 +420,12 @@ QNetworkReply *Buyer::postPrivate(const QString &endpoint, const QJsonObject &fi
 }
 
 void Buyer::refreshBalance() {
-  if (!readOnlyReady() || m_busy) return;
+  if (!m_readKeyVerified || m_busy) return;
+  const QByteArray readKey = m_readKey;
   auto *reply = postPrivate(QStringLiteral("ro/my/balance/AUD?available=yes"), {}, true);
-  connect(reply, &QNetworkReply::finished, this, [this, reply] {
+  connect(reply, &QNetworkReply::finished, this, [this, reply, readKey] {
     const QJsonObject response = QJsonDocument::fromJson(reply->readAll()).object();
+    if (readKey != m_readKey || !m_readKeyVerified) { reply->deleteLater(); return; }
     const QJsonValue available = response.value(QStringLiteral("balance"))
         .toObject().value(QStringLiteral("AUD")).toObject().value(QStringLiteral("available"));
     m_availableAud = reply->error() == QNetworkReply::NoError &&
@@ -370,7 +438,7 @@ void Buyer::refreshBalance() {
 }
 
 void Buyer::submit() {
-  if (m_busy || m_uncertainBuy || !connected() || !readOnlyReady() || m_amount <= 0) return;
+  if (m_busy || m_uncertainBuy || !keysVerified() || m_amount <= 0) return;
   m_busy = true;
   setStatus(QStringLiteral("Checking available AUD…"));
   auto *reply = postPrivate(QStringLiteral("ro/my/balance/AUD?available=yes"), {}, true);
@@ -525,7 +593,7 @@ QJsonObject Buyer::fillSummary(const QJsonArray &completedOrders, const QString 
 }
 
 void Buyer::reviewUncertainBuy() {
-  if (!m_uncertainBuy || !readOnlyReady() || m_busy) return;
+  if (!m_uncertainBuy || !m_readKeyVerified || m_busy) return;
   if (m_statusBusy) {
     setStatus(QStringLiteral("An order refresh is already running. Try again when it finishes."));
     return;
@@ -558,7 +626,7 @@ void Buyer::acknowledgeUncertainBuy() {
 }
 
 void Buyer::refreshOrderStatus() {
-  if (!readOnlyReady() || m_statusBusy) return;
+  if (!m_readKeyVerified || m_statusBusy) return;
   m_statusBusy = true;
   const QJsonObject fields{{QStringLiteral("cointype"), QStringLiteral("BTC")},
                            {QStringLiteral("markettype"), QStringLiteral("AUD")}};
@@ -570,7 +638,7 @@ void Buyer::refreshOrderStatus() {
                            openResponse.value(QStringLiteral("status")).toString() == QLatin1String("ok") &&
                            openResponse.value(QStringLiteral("buyorders")).isArray();
     openReply->deleteLater();
-    if (readKey != m_readKey || !readOnlyReady()) { m_statusBusy = false; return; }
+    if (readKey != m_readKey || !m_readKeyVerified) { m_statusBusy = false; return; }
     if (!openOkay) {
       m_statusBusy = false;
       m_reviewRequested = false;
@@ -600,7 +668,7 @@ void Buyer::refreshOrderStatus() {
                                 history.value(QStringLiteral("status")).toString() == QLatin1String("ok") &&
                                 history.value(QStringLiteral("buyorders")).isArray();
       m_statusBusy = false;
-      if (readKey != m_readKey || !readOnlyReady()) { historyReply->deleteLater(); return; }
+      if (readKey != m_readKey || !m_readKeyVerified) { historyReply->deleteLater(); return; }
       if (historyOkay) {
         const QJsonArray completed = history.value(QStringLiteral("buyorders")).toArray();
         const QJsonArray trackedOrders = m_orders;
@@ -629,7 +697,7 @@ void Buyer::refreshOrderStatus() {
 }
 
 void Buyer::cancelOrder(const QString &id) {
-  if (!connected() || !readOnlyReady() || m_busy || id.isEmpty()) return;
+  if (!keysVerified() || m_busy || id.isEmpty()) return;
   bool found = false;
   for (const auto &entry : m_openOrders)
     if (entry.toObject().value(QStringLiteral("id")).toString() == id) found = true;
