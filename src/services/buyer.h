@@ -37,6 +37,7 @@ class Buyer : public QObject {
   Q_PROPERTY(QVariantList openOrders READ openOrders NOTIFY changed)
   Q_PROPERTY(QVariantList orderHistory READ orderHistory NOTIFY changed)
   Q_PROPERTY(bool ordersLoaded READ ordersLoaded NOTIFY changed)
+  Q_PROPERTY(bool ordersFailed READ ordersFailed NOTIFY changed)
   Q_PROPERTY(bool uncertainBuy READ uncertainBuy NOTIFY changed)
   Q_PROPERTY(bool uncertainRefreshed READ uncertainRefreshed NOTIFY changed)
   Q_PROPERTY(bool journalProblem READ journalProblem NOTIFY changed)
@@ -74,6 +75,8 @@ public:
   QVariantList openOrders() const { return m_openOrders.toVariantList(); }
   QVariantList orderHistory() const { return m_orders.toVariantList(); }
   bool ordersLoaded() const { return m_ordersLoaded; }
+  // The last open-order refresh failed, so no list is shown.
+  bool ordersFailed() const { return m_ordersFailed; }
   bool uncertainBuy() const { return m_uncertainBuy; }
   bool uncertainRefreshed() const { return m_uncertainRefreshed; }
   bool journalProblem() const { return m_journalProblem; }
@@ -148,6 +151,7 @@ private:
   quint64 m_fullValidationSerial = 0;
   quint64 m_readValidationSerial = 0;
   bool m_ordersLoaded = false;
+  bool m_ordersFailed = false;
   bool m_uncertainBuy = false;
   bool m_uncertainRefreshed = false;
   bool m_journalProblem = false;

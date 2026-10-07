@@ -700,8 +700,11 @@ ApplicationWindow {
                 Label {
                     Layout.fillWidth: true
                     visible: Buyer.openOrders.length === 0
-                    text: Buyer.ordersLoaded ? qsTr("None.") : qsTr("Not loaded yet; checked every 15 seconds.")
-                    color: Theme.muted
+                    text: Buyer.ordersLoaded ? qsTr("None.")
+                        : Buyer.ordersFailed ? qsTr("Could not load open orders from CoinSpot. Retrying every 15 seconds; check CoinSpot before buying again.")
+                        : Buyer.readKeyVerified ? qsTr("Loading…")
+                        : qsTr("Loads once your keys are verified.")
+                    color: Buyer.ordersFailed ? Theme.text : Theme.muted
                     wrapMode: Text.Wrap
                 }
                 Repeater {

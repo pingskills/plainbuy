@@ -205,7 +205,7 @@ void Buyer::loadOrders() {
   m_orderPath.clear();
   m_orders = {};
   m_openOrders = {};
-  m_ordersLoaded = false;
+  m_ordersLoaded = false; m_ordersFailed = false;
   m_journalProblem = false;
   m_journalUnsaved = false;
   m_uncertainBuy = false;
@@ -293,7 +293,7 @@ void Buyer::setReadOnlyCredentials(const QString &key, const QString &secret) {
   if (m_busy || m_previewLoading) return;
   m_orderPoll.stop();
   m_openOrders = {};
-  m_ordersLoaded = false;
+  m_ordersLoaded = false; m_ordersFailed = false;
   m_uncertainRefreshed = false; m_reviewRequested = false;
   m_availableAudValue = -1; m_balanceAt = {};
   if (!m_readKey.isEmpty()) sodium_memzero(m_readKey.data(), static_cast<size_t>(m_readKey.size()));
@@ -321,7 +321,7 @@ void Buyer::clearCredentials() {
   m_orderPoll.stop();
   m_lastOrderId.clear(); m_lastOrderDate.clear(); m_orderState.clear();
   m_orders = {}; m_openOrders = {}; m_orderPath.clear();
-  m_ordersLoaded = false;
+  m_ordersLoaded = false; m_ordersFailed = false;
   m_journalProblem = false; m_journalUnsaved = false;
   m_uncertainBuy = false; m_uncertainRefreshed = false; m_reviewRequested = false;
   setStatus(QStringLiteral("API key cleared"));
@@ -795,13 +795,14 @@ void Buyer::refreshOrderStatus() {
       m_reviewRequested = false;
       m_uncertainRefreshed = false;
       m_openOrders = {};
-      m_ordersLoaded = false;
+      m_ordersLoaded = false; m_ordersFailed = true;
       m_orderState = QStringLiteral("Could not refresh order status. Check CoinSpot.");
       setStatus(QStringLiteral("Could not refresh open orders. Check CoinSpot before placing another buy."));
       return;
     }
     m_openOrders = openResponse.value(QStringLiteral("buyorders")).toArray();
     m_ordersLoaded = true;
+    m_ordersFailed = false;
     emit changed();
     if (m_orders.isEmpty()) { m_statusBusy = false; m_reviewRequested = false; return; }
     QJsonObject historyFields = fields;
