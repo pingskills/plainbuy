@@ -330,6 +330,9 @@ void Buyer::clearCredentials() {
 QString Buyer::saveCredentials(const QString &passphrase, const QString &confirmation) {
   if (m_busy || !connected() || !readOnlyReady())
     return QStringLiteral("Enter both Full Access and Read Only API keys before saving.");
+  // Saving replaces any existing file, so only keys CoinSpot accepted may do that.
+  if (!keysVerified())
+    return QStringLiteral("CoinSpot has not verified both API keys yet. The saved file was not changed.");
   if (passphrase.size() < 12) return QStringLiteral("Use a passphrase of at least 12 characters.");
   if (passphrase != confirmation) return QStringLiteral("The passphrases do not match.");
   QString error;

@@ -150,6 +150,35 @@ private slots:
     if (oldDataHome.isNull()) qunsetenv("XDG_DATA_HOME");
     else qputenv("XDG_DATA_HOME", oldDataHome);
   }
+  void unverifiedKeysDoNotReplaceSavedFile() {
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QByteArray oldDataHome = qgetenv("XDG_DATA_HOME");
+    qputenv("XDG_DATA_HOME", dir.path().toUtf8());
+    QString error;
+    const QString path = pb::CredentialStore::defaultPath();
+    QVERIFY2(pb::CredentialStore::save(path, "old passphrase 123", {"old-key", "old-secret", "old-read", "old-read-secret"}, &error),
+             qPrintable(error));
+    QFile before(path);
+    QVERIFY(before.open(QIODevice::ReadOnly));
+    const QByteArray original = before.readAll();
+    before.close();
+    {
+      pb::Buyer buyer;
+      buyer.setCredentials("new-key", "mistyped-secret");
+      buyer.setReadOnlyCredentials("new-read", "new-read-secret");
+      QVERIFY(!buyer.keysVerified());
+      QVERIFY(!buyer.saveCredentials("new passphrase 123", "new passphrase 123").isEmpty());
+    }
+    QFile after(path);
+    QVERIFY(after.open(QIODevice::ReadOnly));
+    QCOMPARE(after.readAll(), original);
+    pb::Credentials unlocked;
+    QVERIFY(pb::CredentialStore::load(path, "old passphrase 123", &unlocked, &error));
+    QCOMPARE(unlocked.key, QByteArray("old-key"));
+    if (oldDataHome.isNull()) qunsetenv("XDG_DATA_HOME");
+    else qputenv("XDG_DATA_HOME", oldDataHome);
+  }
   void savesOrderJournal() {
     QTemporaryDir dir;
     QVERIFY(dir.isValid());

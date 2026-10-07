@@ -16,6 +16,7 @@ class Buyer : public QObject {
   Q_PROPERTY(bool connected READ connected NOTIFY changed)
   Q_PROPERTY(bool readOnlyReady READ readOnlyReady NOTIFY changed)
   Q_PROPERTY(bool keysVerified READ keysVerified NOTIFY changed)
+  Q_PROPERTY(bool keysChecking READ keysChecking NOTIFY changed)
   Q_PROPERTY(bool fullKeyVerified READ fullKeyVerified NOTIFY changed)
   Q_PROPERTY(bool readKeyVerified READ readKeyVerified NOTIFY changed)
   Q_PROPERTY(QString fullKeyStatus READ fullKeyStatus NOTIFY changed)
@@ -48,6 +49,9 @@ public:
   bool connected() const { return !m_key.isEmpty() && !m_secret.isEmpty(); }
   bool readOnlyReady() const { return !m_readKey.isEmpty() && !m_readSecret.isEmpty(); }
   bool keysVerified() const { return m_fullKeyVerified && m_readKeyVerified; }
+  bool keysChecking() const {
+    return m_fullKeyStatus == QLatin1String("Checking…") || m_readKeyStatus == QLatin1String("Checking…");
+  }
   bool fullKeyVerified() const { return m_fullKeyVerified; }
   bool readKeyVerified() const { return m_readKeyVerified; }
   QString fullKeyStatus() const { return m_fullKeyStatus; }

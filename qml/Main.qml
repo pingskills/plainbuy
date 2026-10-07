@@ -34,6 +34,9 @@ ApplicationWindow {
     palette.buttonText: Theme.text
     palette.highlight: Theme.accent
     readonly property bool unlocked: Buyer.connected && Buyer.readOnlyReady
+    // New keys are offered for saving only after CoinSpot verifies both.
+    property bool saveWhenVerified: false
+    property bool saveSkipped: false
     function openKeys() {
         if (Buyer.hasSavedCredentials && !Buyer.connected) unlockDialog.open()
         else if (Buyer.connected && !Buyer.readOnlyReady) readOnlyDialog.open()
@@ -46,6 +49,16 @@ ApplicationWindow {
     }
     Connections {
         target: Buyer
+        function onChanged() {
+            if (!window.saveWhenVerified) return
+            if (Buyer.keysVerified) {
+                window.saveWhenVerified = false
+                saveDialog.open()
+            } else if (!Buyer.keysChecking) {
+                window.saveWhenVerified = false
+                window.saveSkipped = true
+            }
+        }
         function onMarketUpdated() { window.applyAuto() }
         function onPreviewReady() {
             window.confirmQuote = Buyer.preview()
@@ -64,7 +77,7 @@ ApplicationWindow {
             Action { text: qsTr("Set &Read Only key…"); enabled: Buyer.connected && !Buyer.busy && !Buyer.previewLoading; onTriggered: readOnlyDialog.open() }
             Action { text: qsTr("&Retry API checks"); enabled: (Buyer.connected || Buyer.readOnlyReady) && !Buyer.busy && !Buyer.previewLoading; onTriggered: Buyer.validateKeys() }
             Action { text: qsTr("&Unlock encrypted file…"); enabled: Buyer.hasSavedCredentials && !Buyer.busy && !Buyer.previewLoading; onTriggered: unlockDialog.open() }
-            Action { text: qsTr("&Save encrypted file…"); enabled: Buyer.connected && Buyer.readOnlyReady && !Buyer.busy && !Buyer.previewLoading; onTriggered: saveDialog.open() }
+            Action { text: qsTr("&Save encrypted file…"); enabled: Buyer.keysVerified && !Buyer.busy && !Buyer.previewLoading; onTriggered: saveDialog.open() }
             Action { text: qsTr("&Remove encrypted file"); enabled: Buyer.hasSavedCredentials && !Buyer.busy && !Buyer.previewLoading; onTriggered: Buyer.forgetSavedCredentials() }
             Action { text: qsTr("&Clear API keys"); enabled: (Buyer.connected || Buyer.readOnlyReady) && !Buyer.busy && !Buyer.previewLoading; onTriggered: Buyer.clearCredentials() }
         }
@@ -78,6 +91,7 @@ ApplicationWindow {
         width: Math.min(window.width - 32, 440)
         standardButtons: Dialog.Ok | Dialog.Cancel
         onAccepted: Buyer.setReadOnlyCredentials(onlyKeyField.text, onlySecretField.text)
+        onOpened: onlyKeyField.forceActiveFocus()
         onClosed: { onlyKeyField.text = ""; onlySecretField.text = "" }
         contentItem: ColumnLayout {
             spacing: 9
@@ -110,6 +124,7 @@ ApplicationWindow {
         anchors.centerIn: parent
         width: Math.min(window.width - 32, 440)
         standardButtons: Dialog.Ok | Dialog.Cancel
+        onOpened: keyField.forceActiveFocus()
         onClosed: { keyField.text = ""; secretField.text = ""; readKeyField.text = ""; readSecretField.text = "" }
         contentItem: ColumnLayout {
             spacing: 9
@@ -144,6 +159,7 @@ ApplicationWindow {
                 placeholderText: qsTr("Read Only API secret")
                 echoMode: TextInput.Password
                 Accessible.name: qsTr("CoinSpot Read Only API secret")
+                onAccepted: credentialsDialog.accept()
             }
             CheckBox {
                 id: saveAfterEntry
@@ -153,7 +169,7 @@ ApplicationWindow {
             Label {
                 Layout.fillWidth: true
                 visible: saveAfterEntry.checked && Buyer.hasSavedCredentials
-                text: qsTr("Saving replaces your existing encrypted key file and its passphrase.")
+                text: qsTr("Once CoinSpot verifies both keys, saving replaces your existing encrypted key file and its passphrase. Until then the old file is kept.")
                 wrapMode: Text.Wrap
                 color: Theme.text
             }
@@ -161,8 +177,8 @@ ApplicationWindow {
         onAccepted: {
             Buyer.setCredentials(keyField.text, secretField.text)
             Buyer.setReadOnlyCredentials(readKeyField.text, readSecretField.text)
-            if (saveAfterEntry.checked && Buyer.connected && Buyer.readOnlyReady)
-                Qt.callLater(function() { saveDialog.open() })
+            window.saveSkipped = false
+            window.saveWhenVerified = saveAfterEntry.checked && Buyer.connected && Buyer.readOnlyReady
         }
     }
 
@@ -395,6 +411,17 @@ ApplicationWindow {
                     visible: window.unlocked
                     text: qsTr("Full Access: %1 · Read Only: %2").arg(Buyer.fullKeyStatus).arg(Buyer.readKeyStatus)
                     color: Theme.muted
+                    wrapMode: Text.Wrap
+                }
+                Label {
+                    Layout.fillWidth: true
+                    visible: text.length > 0
+                    text: window.saveWhenVerified
+                          ? qsTr("The new keys will be offered for saving once CoinSpot verifies both.")
+                          : window.saveSkipped
+                            ? qsTr("The new keys were not saved because CoinSpot did not verify both. Any saved key file is unchanged.")
+                            : ""
+                    color: Theme.text
                     wrapMode: Text.Wrap
                 }
                 RowLayout {
