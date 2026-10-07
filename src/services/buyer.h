@@ -21,6 +21,7 @@ class Buyer : public QObject {
   Q_PROPERTY(QString readKeyStatus READ readKeyStatus NOTIFY changed)
   Q_PROPERTY(bool hasSavedCredentials READ hasSavedCredentials NOTIFY changed)
   Q_PROPERTY(bool busy READ busy NOTIFY changed)
+  Q_PROPERTY(bool previewLoading READ previewLoading NOTIFY changed)
   Q_PROPERTY(QString status READ status NOTIFY changed)
   Q_PROPERTY(QString bestAsk READ bestAsk NOTIFY changed)
   Q_PROPERTY(QString recommendedPrice READ recommendedPrice NOTIFY recommendedPriceChanged)
@@ -48,6 +49,7 @@ public:
   QString readKeyStatus() const { return m_readKeyStatus; }
   bool hasSavedCredentials() const { return m_hasSavedCredentials; }
   bool busy() const { return m_busy; }
+  bool previewLoading() const { return m_previewLoading; }
   QString status() const { return m_status; }
   QString bestAsk() const { return m_bestAsk; }
   QString recommendedPrice() const { return m_recommendedPrice; }
@@ -91,9 +93,10 @@ public:
 signals:
   void changed();
   void recommendedPriceChanged();
+  void previewReady();
 private:
   void setStatus(const QString &value);
-  void fetchBook(double budget);
+  void fetchBook(double budget, bool forPreview = false);
   QNetworkReply *postPrivate(const QString &endpoint, const QJsonObject &fields, bool readOnly);
   void placePreparedOrder();
   void loadOrders();
@@ -106,6 +109,7 @@ private:
   qint64 m_nonce = 0;
   qint64 m_readNonce = 0;
   bool m_busy = false;
+  bool m_previewLoading = false;
   bool m_statusBusy = false;
   bool m_hasSavedCredentials = false;
   bool m_fullKeyVerified = false;

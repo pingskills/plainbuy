@@ -26,6 +26,10 @@ ApplicationWindow {
             if (Buyer.recommendedPrice)
                 priceField.text = Buyer.recommendedPrice
         }
+        function onPreviewReady() {
+            confirmText.text = Buyer.preview()
+            confirmDialog.open()
+        }
     }
 
     menuBar: MenuBar {
@@ -35,13 +39,13 @@ ApplicationWindow {
         }
         Menu {
             title: qsTr("&Account")
-            Action { text: qsTr("&Enter API keys…"); onTriggered: credentialsDialog.open() }
-            Action { text: qsTr("Set &Read Only key…"); enabled: Buyer.connected && !Buyer.busy; onTriggered: readOnlyDialog.open() }
-            Action { text: qsTr("&Retry API checks"); enabled: (Buyer.connected || Buyer.readOnlyReady) && !Buyer.busy; onTriggered: Buyer.validateKeys() }
-            Action { text: qsTr("&Unlock encrypted file…"); enabled: Buyer.hasSavedCredentials && !Buyer.busy; onTriggered: unlockDialog.open() }
-            Action { text: qsTr("&Save encrypted file…"); enabled: Buyer.connected && Buyer.readOnlyReady && !Buyer.busy; onTriggered: saveDialog.open() }
-            Action { text: qsTr("&Remove encrypted file"); enabled: Buyer.hasSavedCredentials && !Buyer.busy; onTriggered: Buyer.forgetSavedCredentials() }
-            Action { text: qsTr("&Clear API keys"); enabled: (Buyer.connected || Buyer.readOnlyReady) && !Buyer.busy; onTriggered: Buyer.clearCredentials() }
+            Action { text: qsTr("&Enter API keys…"); enabled: !Buyer.previewLoading && !Buyer.busy; onTriggered: credentialsDialog.open() }
+            Action { text: qsTr("Set &Read Only key…"); enabled: Buyer.connected && !Buyer.busy && !Buyer.previewLoading; onTriggered: readOnlyDialog.open() }
+            Action { text: qsTr("&Retry API checks"); enabled: (Buyer.connected || Buyer.readOnlyReady) && !Buyer.busy && !Buyer.previewLoading; onTriggered: Buyer.validateKeys() }
+            Action { text: qsTr("&Unlock encrypted file…"); enabled: Buyer.hasSavedCredentials && !Buyer.busy && !Buyer.previewLoading; onTriggered: unlockDialog.open() }
+            Action { text: qsTr("&Save encrypted file…"); enabled: Buyer.connected && Buyer.readOnlyReady && !Buyer.busy && !Buyer.previewLoading; onTriggered: saveDialog.open() }
+            Action { text: qsTr("&Remove encrypted file"); enabled: Buyer.hasSavedCredentials && !Buyer.busy && !Buyer.previewLoading; onTriggered: Buyer.forgetSavedCredentials() }
+            Action { text: qsTr("&Clear API keys"); enabled: (Buyer.connected || Buyer.readOnlyReady) && !Buyer.busy && !Buyer.previewLoading; onTriggered: Buyer.clearCredentials() }
         }
     }
 
@@ -194,7 +198,8 @@ ApplicationWindow {
         standardButtons: Dialog.Ok | Dialog.Cancel
         onAccepted: Buyer.submit()
         contentItem: Label {
-            text: Buyer.preview()
+            id: confirmText
+            text: ""
             wrapMode: Text.Wrap
             color: Theme.text
         }
@@ -268,7 +273,7 @@ ApplicationWindow {
                         font.features: { "tnum": 1 }
                     }
                     Item { Layout.fillWidth: true }
-                    Button { text: qsTr("Refresh"); onClicked: Buyer.refreshBestAsk() }
+                    Button { text: qsTr("Refresh"); enabled: !Buyer.previewLoading; onClicked: Buyer.refreshBestAsk() }
                 }
                 Label {
                     text: Buyer.marketSpread ? qsTr("Current bid–ask gap: %1").arg(Buyer.marketSpread) : ""
@@ -300,6 +305,7 @@ ApplicationWindow {
                     id: priceField
                     objectName: "priceField"
                     Layout.fillWidth: true
+                    enabled: !Buyer.previewLoading
                     placeholderText: qsTr("AUD per BTC")
                     inputMethodHints: Qt.ImhFormattedNumbersOnly
                     font.features: { "tnum": 1 }
@@ -311,6 +317,7 @@ ApplicationWindow {
                     id: amountField
                     objectName: "amountField"
                     Layout.fillWidth: true
+                    enabled: !Buyer.previewLoading
                     placeholderText: qsTr("AUD")
                     inputMethodHints: Qt.ImhFormattedNumbersOnly
                     font.features: { "tnum": 1 }
@@ -319,16 +326,17 @@ ApplicationWindow {
                 }
                 Button {
                     text: qsTr("Suggest max price")
+                    enabled: !Buyer.previewLoading
                     onClicked: Buyer.recommend(amountField.text)
                     Accessible.name: text
                 }
                 Button {
                     id: buyButton
                     objectName: "buyButton"
-                    text: Buyer.busy ? qsTr("Submitting…") : qsTr("Buy BTC")
-                    enabled: Buyer.keysVerified && !Buyer.busy && !Buyer.uncertainBuy && !Buyer.journalProblem
+                    text: Buyer.previewLoading ? qsTr("Checking price…") : Buyer.busy ? qsTr("Submitting…") : qsTr("Buy BTC")
+                    enabled: Buyer.keysVerified && !Buyer.busy && !Buyer.previewLoading && !Buyer.uncertainBuy && !Buyer.journalProblem
                     Layout.alignment: Qt.AlignLeft
-                    onClicked: if (Buyer.prepare(amountField.text, priceField.text)) confirmDialog.open()
+                    onClicked: Buyer.prepare(amountField.text, priceField.text)
                     Accessible.name: text
                     contentItem: Label {
                         text: buyButton.text
