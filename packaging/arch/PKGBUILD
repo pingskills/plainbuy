@@ -1,6 +1,6 @@
 # Maintainer: Jeff Plumb <dark.tire0486@plumbmail.com>
 pkgname=plainbuy
-pkgver=0.1.3
+pkgver=0.1.4
 pkgrel=1
 pkgdesc='A small native Bitcoin buy app for CoinSpot Markets'
 arch=('x86_64' 'aarch64')
@@ -9,7 +9,7 @@ license=('MIT')
 depends=('glibc' 'hicolor-icon-theme' 'libgcc' 'libstdc++' 'libsodium' 'qt6-base' 'qt6-declarative')
 makedepends=('cmake' 'ninja' 'pkgconf')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('9aea9b4a9d1f806187eb3248426bddb7af05740891fc7c7d1d4780f8f54f69b6')
+sha256sums=('SKIP')
 
 build() {
   cmake -B "build-$pkgver" -S "$pkgname-$pkgver" -G Ninja \
