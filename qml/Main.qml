@@ -33,7 +33,17 @@ ApplicationWindow {
     palette.text: Theme.text
     palette.buttonText: Theme.text
     palette.highlight: Theme.accent
-    Component.onCompleted: Buyer.refreshBestAsk()
+    readonly property bool unlocked: Buyer.connected && Buyer.readOnlyReady
+    function openKeys() {
+        if (Buyer.hasSavedCredentials && !Buyer.connected) unlockDialog.open()
+        else if (Buyer.connected && !Buyer.readOnlyReady) readOnlyDialog.open()
+        else credentialsDialog.open()
+    }
+    Component.onCompleted: {
+        Buyer.refreshBestAsk()
+        // Ask for the passphrase (or first-run keys) once per launch.
+        Qt.callLater(window.openKeys)
+    }
     Connections {
         target: Buyer
         function onMarketUpdated() { window.applyAuto() }
@@ -140,6 +150,13 @@ ApplicationWindow {
                 text: qsTr("Save encrypted copy")
                 checked: true
             }
+            Label {
+                Layout.fillWidth: true
+                visible: saveAfterEntry.checked && Buyer.hasSavedCredentials
+                text: qsTr("Saving replaces your existing encrypted key file and its passphrase.")
+                wrapMode: Text.Wrap
+                color: Theme.text
+            }
         }
         onAccepted: {
             Buyer.setCredentials(keyField.text, secretField.text)
@@ -155,9 +172,13 @@ ApplicationWindow {
         modal: true
         anchors.centerIn: parent
         width: Math.min(window.width - 32, 440)
-        standardButtons: Dialog.Save | Dialog.Cancel
-        onAccepted: Buyer.saveCredentials(savePass.text, saveConfirm.text)
-        onClosed: { savePass.text = ""; saveConfirm.text = "" }
+        function trySave() {
+            const error = Buyer.saveCredentials(savePass.text, saveConfirm.text)
+            if (error) { saveError.text = error; savePass.forceActiveFocus() }
+            else saveDialog.close()
+        }
+        onOpened: savePass.forceActiveFocus()
+        onClosed: { savePass.text = ""; saveConfirm.text = ""; saveError.text = "" }
         contentItem: ColumnLayout {
             spacing: 9
             Label {
@@ -172,6 +193,7 @@ ApplicationWindow {
                 placeholderText: qsTr("Passphrase")
                 echoMode: TextInput.Password
                 Accessible.name: qsTr("Encryption passphrase")
+                onAccepted: saveConfirm.forceActiveFocus()
             }
             TextField {
                 id: saveConfirm
@@ -179,24 +201,79 @@ ApplicationWindow {
                 placeholderText: qsTr("Repeat passphrase")
                 echoMode: TextInput.Password
                 Accessible.name: qsTr("Confirm encryption passphrase")
+                onAccepted: saveDialog.trySave()
             }
+            Label {
+                id: saveError
+                Layout.fillWidth: true
+                visible: text.length > 0
+                color: Theme.text
+                font.weight: Font.DemiBold
+                wrapMode: Text.Wrap
+            }
+        }
+        footer: DialogButtonBox {
+            Button { text: qsTr("Cancel"); onClicked: saveDialog.close() }
+            Button { text: qsTr("Save"); highlighted: true; onClicked: saveDialog.trySave() }
         }
     }
 
     Dialog {
         id: unlockDialog
-        title: qsTr("Unlock API credentials")
+        title: qsTr("Unlock PlainBuy")
         modal: true
         anchors.centerIn: parent
         width: Math.min(window.width - 32, 440)
-        standardButtons: Dialog.Ok | Dialog.Cancel
-        onAccepted: Buyer.unlockCredentials(unlockPass.text)
-        onClosed: unlockPass.text = ""
-        contentItem: TextField {
-            id: unlockPass
-            placeholderText: qsTr("File passphrase")
-            echoMode: TextInput.Password
-            Accessible.name: qsTr("Encrypted file passphrase")
+        function tryUnlock() {
+            const error = Buyer.unlockCredentials(unlockPass.text)
+            if (error) { unlockError.text = error; unlockPass.text = ""; unlockPass.forceActiveFocus() }
+            else unlockDialog.close()
+        }
+        onOpened: unlockPass.forceActiveFocus()
+        onClosed: { unlockPass.text = ""; unlockError.text = "" }
+        contentItem: ColumnLayout {
+            spacing: 9
+            Label {
+                Layout.fillWidth: true
+                text: qsTr("Enter the passphrase for your saved CoinSpot API keys.")
+                color: Theme.muted
+                wrapMode: Text.Wrap
+            }
+            TextField {
+                id: unlockPass
+                Layout.fillWidth: true
+                placeholderText: qsTr("Passphrase")
+                echoMode: TextInput.Password
+                Accessible.name: qsTr("Encrypted file passphrase")
+                onAccepted: unlockDialog.tryUnlock()
+            }
+            Label {
+                id: unlockError
+                Layout.fillWidth: true
+                visible: text.length > 0
+                color: Theme.text
+                font.weight: Font.DemiBold
+                wrapMode: Text.Wrap
+            }
+        }
+        footer: RowLayout {
+            spacing: 8
+            Button {
+                Layout.leftMargin: 12
+                Layout.bottomMargin: 12
+                flat: true
+                text: qsTr("Enter new keys…")
+                onClicked: { unlockDialog.close(); credentialsDialog.open() }
+            }
+            Item { Layout.fillWidth: true }
+            Button { Layout.bottomMargin: 12; text: qsTr("Cancel"); onClicked: unlockDialog.close() }
+            Button {
+                Layout.rightMargin: 12
+                Layout.bottomMargin: 12
+                text: qsTr("Unlock")
+                highlighted: true
+                onClicked: unlockDialog.tryUnlock()
+            }
         }
     }
 
@@ -306,14 +383,16 @@ ApplicationWindow {
                     Layout.fillWidth: true
                     Label { text: qsTr("BTC / AUD"); color: Theme.muted; font.letterSpacing: 1.4 }
                     Item { Layout.fillWidth: true }
-                    Label { text: Buyer.keysVerified ? qsTr("Keys verified") : Buyer.hasSavedCredentials && !Buyer.connected ? qsTr("Locked") : qsTr("Keys not verified"); color: Theme.muted }
+                    Label { visible: window.unlocked; text: Buyer.keysVerified ? qsTr("Keys verified") : qsTr("Keys not verified"); color: Theme.muted }
                     Button {
-                        text: Buyer.hasSavedCredentials && !Buyer.connected ? qsTr("Unlock…") : qsTr("Set keys…")
-                        onClicked: Buyer.hasSavedCredentials && !Buyer.connected ? unlockDialog.open() : credentialsDialog.open()
+                        visible: window.unlocked
+                        text: qsTr("Set keys…")
+                        onClicked: credentialsDialog.open()
                     }
                 }
                 Label {
                     Layout.fillWidth: true
+                    visible: window.unlocked
                     text: qsTr("Full Access: %1 · Read Only: %2").arg(Buyer.fullKeyStatus).arg(Buyer.readKeyStatus)
                     color: Theme.muted
                     wrapMode: Text.Wrap
@@ -337,6 +416,7 @@ ApplicationWindow {
                 }
                 RowLayout {
                     Layout.fillWidth: true
+                    visible: window.unlocked
                     Label { text: qsTr("Available AUD"); color: Theme.muted }
                     Label { text: Buyer.availableAud ? "A$" + window.money(Buyer.availableAud) : qsTr("Unavailable"); color: Theme.text; font.features: { "tnum": 1 } }
                     Label { visible: Buyer.balanceUpdated !== ""; text: qsTr("at %1").arg(Buyer.balanceUpdated); color: Theme.muted }
@@ -345,7 +425,7 @@ ApplicationWindow {
                 }
                 Label {
                     Layout.fillWidth: true
-                    visible: !Buyer.availableAud
+                    visible: window.unlocked && !Buyer.availableAud
                     text: Buyer.readKeyVerified
                           ? qsTr("Balance unavailable: CoinSpot did not return a usable balance. Refresh to retry.")
                           : qsTr("Verify a Read Only API key to see your balance.")
@@ -364,6 +444,42 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 Layout.leftMargin: 28
                 Layout.rightMargin: 28
+                visible: !window.unlocked
+                spacing: 10
+                Label {
+                    text: Buyer.hasSavedCredentials && !Buyer.connected ? qsTr("Locked") : qsTr("No API keys")
+                    color: Theme.text
+                    font.weight: Font.DemiBold
+                }
+                Label {
+                    Layout.fillWidth: true
+                    text: Buyer.hasSavedCredentials && !Buyer.connected
+                          ? qsTr("Unlock your saved CoinSpot API keys to see your balance and buy.")
+                          : Buyer.connected
+                            ? qsTr("Add a Read Only API key for balance and order checks to start buying.")
+                            : qsTr("Enter your CoinSpot API keys to see your balance and buy.")
+                    color: Theme.muted
+                    wrapMode: Text.Wrap
+                }
+                Button {
+                    text: Buyer.hasSavedCredentials && !Buyer.connected ? qsTr("Unlock…")
+                        : Buyer.connected ? qsTr("Add Read Only key…") : qsTr("Enter API keys…")
+                    highlighted: true
+                    onClicked: window.openKeys()
+                }
+                Label {
+                    Layout.fillWidth: true
+                    text: Buyer.status
+                    visible: text.length > 0
+                    color: Theme.text
+                    wrapMode: Text.Wrap
+                }
+            }
+            ColumnLayout {
+                Layout.fillWidth: true
+                Layout.leftMargin: 28
+                Layout.rightMargin: 28
+                visible: window.unlocked
                 spacing: 10
                 Label { text: qsTr("Spend"); color: Theme.text; font.weight: Font.DemiBold }
                 TextField {
@@ -525,11 +641,12 @@ ApplicationWindow {
                     wrapMode: Text.Wrap
                 }
             }
-            Rectangle { Layout.fillWidth: true; Layout.leftMargin: 28; Layout.rightMargin: 28; implicitHeight: 1; color: Theme.border }
+            Rectangle { visible: window.unlocked; Layout.fillWidth: true; Layout.leftMargin: 28; Layout.rightMargin: 28; implicitHeight: 1; color: Theme.border }
             ColumnLayout {
                 Layout.fillWidth: true
                 Layout.leftMargin: 28
                 Layout.rightMargin: 28
+                visible: window.unlocked
                 spacing: 8
                 RowLayout {
                     Layout.fillWidth: true

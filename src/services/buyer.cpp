@@ -327,34 +327,26 @@ void Buyer::clearCredentials() {
   setStatus(QStringLiteral("API key cleared"));
 }
 
-void Buyer::saveCredentials(const QString &passphrase, const QString &confirmation) {
-  if (m_busy || !connected() || !readOnlyReady()) {
-    setStatus(QStringLiteral("Enter both Full Access and Read Only API keys before saving."));
-    return;
-  }
-  if (passphrase.size() < 12 || passphrase != confirmation) {
-    setStatus(QStringLiteral("Use a matching passphrase of at least 12 characters."));
-    return;
-  }
+QString Buyer::saveCredentials(const QString &passphrase, const QString &confirmation) {
+  if (m_busy || !connected() || !readOnlyReady())
+    return QStringLiteral("Enter both Full Access and Read Only API keys before saving.");
+  if (passphrase.size() < 12) return QStringLiteral("Use a passphrase of at least 12 characters.");
+  if (passphrase != confirmation) return QStringLiteral("The passphrases do not match.");
   QString error;
   if (!CredentialStore::save(CredentialStore::defaultPath(), passphrase,
-                             {m_key, m_secret, m_readKey, m_readSecret}, &error)) {
-    setStatus(error);
-    return;
-  }
+                             {m_key, m_secret, m_readKey, m_readSecret}, &error))
+    return error;
   m_hasSavedCredentials = true;
   setStatus(QStringLiteral("Credentials saved in the encrypted file. Use the passphrase to unlock next time."));
+  return {};
 }
 
-void Buyer::unlockCredentials(const QString &passphrase) {
-  if (m_busy || m_previewLoading) return;
+QString Buyer::unlockCredentials(const QString &passphrase) {
+  if (m_busy || m_previewLoading) return QStringLiteral("PlainBuy is busy. Try again in a moment.");
   Credentials credentials;
   QString error;
-  if (!CredentialStore::load(CredentialStore::defaultPath(), passphrase,
-                             &credentials, &error)) {
-    setStatus(error);
-    return;
-  }
+  if (!CredentialStore::load(CredentialStore::defaultPath(), passphrase, &credentials, &error))
+    return error;
   if (!m_key.isEmpty()) sodium_memzero(m_key.data(), static_cast<size_t>(m_key.size()));
   if (!m_secret.isEmpty()) sodium_memzero(m_secret.data(), static_cast<size_t>(m_secret.size()));
   if (!m_readKey.isEmpty()) sodium_memzero(m_readKey.data(), static_cast<size_t>(m_readKey.size()));
@@ -366,9 +358,10 @@ void Buyer::unlockCredentials(const QString &passphrase) {
   m_hasSavedCredentials = true;
   m_orderPoll.stop();
   loadOrders();
-  setStatus(readOnlyReady() ? QStringLiteral("Credentials unlocked; checking both API keys…")
-                            : QStringLiteral("Trading key unlocked. Add a separate read-only key for balance and status checks."));
+  // The key check progress and any problem show under Buy, so no status is needed.
+  setStatus({});
   validateKeys();
+  return {};
 }
 
 void Buyer::forgetSavedCredentials() {
@@ -407,6 +400,10 @@ QString Buyer::buyBlockedReason() const {
   if (!connected() || !readOnlyReady())
     return m_hasSavedCredentials && !connected() ? QStringLiteral("Unlock your saved API keys to buy.")
                                                  : QStringLiteral("Add your CoinSpot API keys to buy.");
+  if (m_fullKeyStatus == QLatin1String("Rejected by CoinSpot") || m_readKeyStatus == QLatin1String("Rejected by CoinSpot"))
+    return QStringLiteral("CoinSpot rejected an API key. Use Set keys… to enter new keys.");
+  if (m_fullKeyStatus == QLatin1String("Could not verify; retry") || m_readKeyStatus == QLatin1String("Could not verify; retry"))
+    return QStringLiteral("Could not reach CoinSpot to verify the API keys. Use Account → Retry API checks.");
   if (!keysVerified()) return QStringLiteral("Waiting for CoinSpot to verify both API keys.");
   if (m_journalProblem) return QStringLiteral("Buying is blocked: the local order journal is unreadable.");
   if (m_journalUnsaved) return QStringLiteral("Buying is blocked until the latest order update is saved.");

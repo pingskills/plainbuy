@@ -80,8 +80,9 @@ public:
   Q_INVOKABLE void setReadOnlyCredentials(const QString &key, const QString &secret);
   Q_INVOKABLE void clearCredentials();
   Q_INVOKABLE void validateKeys();
-  Q_INVOKABLE void saveCredentials(const QString &passphrase, const QString &confirmation);
-  Q_INVOKABLE void unlockCredentials(const QString &passphrase);
+  // Both return an error message, or an empty string on success.
+  Q_INVOKABLE QString saveCredentials(const QString &passphrase, const QString &confirmation);
+  Q_INVOKABLE QString unlockCredentials(const QString &passphrase);
   Q_INVOKABLE void forgetSavedCredentials();
   Q_INVOKABLE void refreshBestAsk();
   Q_INVOKABLE void refreshBalance(bool force = false);
