@@ -31,12 +31,21 @@ private slots:
     QVERIFY((fractional + 0.00000001) * 123456.78 > 100.01);
   }
   void reservesAudForMarketFee() {
-    QCOMPARE(pb::Buyer::spendWithFeeReserve(100.0), 99.90);
-    QCOMPARE(pb::Buyer::spendWithFeeReserve(0.01), 0.0);
-    QCOMPARE(pb::Buyer::spendWithFeeReserve(0.0), 0.0);
-    const double spend = pb::Buyer::spendWithFeeReserve(1234.56);
-    QVERIFY(spend * 1.001 <= 1234.56 + 0.000000001);
-    QVERIFY((spend + 0.01) * 1.001 > 1234.56);
+    const double fee = pb::Buyer::kMarketsFeeRate;
+    const double amount = pb::Buyer::coinAmount(100.0, 100000.0, fee);
+    QVERIFY(amount < 0.001);
+    QVERIFY(amount * 100000.0 * (1.0 + fee) <= 100.0);
+    QVERIFY((amount + 0.00000001) * 100000.0 * (1.0 + fee) > 100.0);
+    const double fractional = pb::Buyer::coinAmount(1234.56, 98765.43, fee);
+    QVERIFY(fractional * 98765.43 * (1.0 + fee) <= 1234.56 + 0.00000001);
+    QVERIFY((fractional + 0.00000001) * 98765.43 * (1.0 + fee) > 1234.56);
+    QCOMPARE(pb::Buyer::coinAmount(100.0, 100000.0, -0.1), 0.0);
+  }
+  void roundsSuggestedSpendDownToCents() {
+    QCOMPARE(pb::Buyer::wholeCents(100.0), 100.0);
+    QCOMPARE(pb::Buyer::wholeCents(1234.567), 1234.56);
+    QCOMPARE(pb::Buyer::wholeCents(0.009), 0.0);
+    QCOMPARE(pb::Buyer::wholeCents(0.0), 0.0);
   }
   void suggestsLowestSufficientAsk() {
     const QVector<pb::AskLevel> asks{{101000, 0.001}, {100000, 0.0005}};
@@ -55,6 +64,15 @@ private slots:
     QVERIFY(pb::Buyer::describeOrder({}, complete, "order-1", 0.01).startsWith("Filled:"));
     QVERIFY(pb::Buyer::describeOrder({}, {}, "order-1", 0.01).startsWith("No open order"));
     QVERIFY(pb::Buyer::describeOrder({}, {}, "order-1", 0.00000001).startsWith("No open order"));
+  }
+  void keepsRecordedFillWhenHistoryIsTruncated() {
+    const QJsonObject filled{{"id", "order-1"}, {"amount", 0.01}, {"filledBtc", 0.01}};
+    QVERIFY(pb::Buyer::keepsRecordedFill(filled, {}));
+    QVERIFY(pb::Buyer::keepsRecordedFill(filled, QJsonObject{{"filledBtc", 0.004}}));
+    QVERIFY(!pb::Buyer::keepsRecordedFill(filled, QJsonObject{{"filledBtc", 0.01}}));
+    QVERIFY(!pb::Buyer::keepsRecordedFill(QJsonObject{{"id", "order-1"}, {"amount", 0.01}}, {}));
+    QVERIFY(!pb::Buyer::keepsRecordedFill(QJsonObject{{"filledBtc", 0.004}},
+                                          QJsonObject{{"filledBtc", 0.01}}));
   }
   void aggregatesReportedFills() {
     const QJsonArray fills{

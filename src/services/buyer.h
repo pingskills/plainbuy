@@ -35,6 +35,7 @@ class Buyer : public QObject {
   Q_PROPERTY(bool uncertainBuy READ uncertainBuy NOTIFY changed)
   Q_PROPERTY(bool uncertainRefreshed READ uncertainRefreshed NOTIFY changed)
   Q_PROPERTY(bool journalProblem READ journalProblem NOTIFY changed)
+  Q_PROPERTY(bool journalUnsaved READ journalUnsaved NOTIFY changed)
   Q_PROPERTY(QString journalPath READ journalPath NOTIFY changed)
   Q_PROPERTY(QString version READ version CONSTANT)
 public:
@@ -63,6 +64,7 @@ public:
   bool uncertainBuy() const { return m_uncertainBuy; }
   bool uncertainRefreshed() const { return m_uncertainRefreshed; }
   bool journalProblem() const { return m_journalProblem; }
+  bool journalUnsaved() const { return m_journalUnsaved; }
   QString journalPath() const { return m_orderPath; }
   QString version() const;
   Q_INVOKABLE void setCredentials(const QString &key, const QString &secret);
@@ -79,18 +81,22 @@ public:
   Q_INVOKABLE void refreshOrderStatus();
   Q_INVOKABLE void reviewUncertainBuy();
   Q_INVOKABLE void acknowledgeUncertainBuy();
+  Q_INVOKABLE void retrySaveJournal();
   Q_INVOKABLE void cancelOrder(const QString &id);
   Q_INVOKABLE bool prepare(const QString &aud, const QString &maxPrice);
   Q_INVOKABLE QString preview() const;
   Q_INVOKABLE void submit();
   static bool parseMoney(const QString &text, int maxDecimals, double *value);
-  static double coinAmount(double audBudget, double maxPrice);
-  static double spendWithFeeReserve(double availableAud);
+  // CoinSpot's listed Markets fee, reserved in case it is charged in AUD on top of the trade.
+  static constexpr double kMarketsFeeRate = 0.001;
+  static double coinAmount(double audBudget, double maxPrice, double feeRate = 0);
+  static double wholeCents(double aud);
   static double recommendedCap(QVector<AskLevel> asks, double audBudget);
   static QString describeOrder(const QJsonArray &openOrders,
                                const QJsonArray &completedOrders,
                                const QString &orderId, double requestedAmount);
   static QJsonObject fillSummary(const QJsonArray &completedOrders, const QString &orderId);
+  static bool keepsRecordedFill(const QJsonObject &order, const QJsonObject &fills);
   static bool apiStatusOkay(const QJsonObject &response);
 signals:
   void changed();
@@ -105,6 +111,7 @@ private:
   void loadOrders();
   void updateOrder(const QString &id, const QString &state, const QJsonObject &fills = {});
   void removeAttempt(const QString &attemptId);
+  bool saveOrders();
   void validateFullKey();
   void validateReadKey();
   QNetworkAccessManager m_network;
@@ -126,6 +133,7 @@ private:
   bool m_uncertainBuy = false;
   bool m_uncertainRefreshed = false;
   bool m_journalProblem = false;
+  bool m_journalUnsaved = false;
   bool m_reviewRequested = false;
   double m_budget = 0;
   double m_maxPrice = 0;

@@ -344,7 +344,7 @@ ApplicationWindow {
                 }
                 Label {
                     Layout.fillWidth: true
-                    text: qsTr("Fetches a fresh balance and leaves a 0.1% fee allowance. Review the amount before buying.")
+                    text: qsTr("Fetches a fresh balance. Every order is sized to leave room for CoinSpot's 0.1% fee within this amount.")
                     color: Theme.muted
                     wrapMode: Text.Wrap
                 }
@@ -358,7 +358,7 @@ ApplicationWindow {
                     id: buyButton
                     objectName: "buyButton"
                     text: Buyer.previewLoading ? qsTr("Checking price…") : Buyer.busy ? qsTr("Submitting…") : qsTr("Buy BTC")
-                    enabled: Buyer.keysVerified && !Buyer.busy && !Buyer.previewLoading && !Buyer.uncertainBuy && !Buyer.journalProblem
+                    enabled: Buyer.keysVerified && !Buyer.busy && !Buyer.previewLoading && !Buyer.uncertainBuy && !Buyer.journalProblem && !Buyer.journalUnsaved
                     Layout.alignment: Qt.AlignLeft
                     onClicked: Buyer.prepare(amountField.text, priceField.text)
                     Accessible.name: text
@@ -385,6 +385,19 @@ ApplicationWindow {
                     text: qsTr("The local order journal cannot be read, so buying is blocked. Back up and inspect this file: %1. Restore a valid copy, or check CoinSpot's open and completed orders, move the damaged file aside, and reopen PlainBuy. An unknown earlier buy may have succeeded.").arg(Buyer.journalPath)
                     color: Theme.text
                     wrapMode: Text.WrapAnywhere
+                }
+                Label {
+                    Layout.fillWidth: true
+                    visible: Buyer.journalUnsaved
+                    text: qsTr("The latest order update is not saved in the local order journal (%1). New buys are blocked until it is saved.").arg(Buyer.journalPath)
+                    color: Theme.text
+                    wrapMode: Text.WrapAnywhere
+                }
+                Button {
+                    visible: Buyer.journalUnsaved
+                    text: qsTr("Retry saving")
+                    onClicked: Buyer.retrySaveJournal()
+                    Accessible.name: text
                 }
                 Label {
                     Layout.fillWidth: true

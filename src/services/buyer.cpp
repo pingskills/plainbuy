@@ -39,29 +39,25 @@ bool Buyer::parseMoney(const QString &text, int maxDecimals, double *value) {
   return true;
 }
 
-double Buyer::coinAmount(double audBudget, double maxPrice) {
-  if (!std::isfinite(audBudget) || !std::isfinite(maxPrice) || audBudget <= 0 || maxPrice <= 0)
+double Buyer::coinAmount(double audBudget, double maxPrice, double feeRate) {
+  if (!std::isfinite(audBudget) || !std::isfinite(maxPrice) || !std::isfinite(feeRate) ||
+      audBudget <= 0 || maxPrice <= 0 || feeRate < 0)
     return 0;
   // Calculate satoshis with extra precision. The final check prevents a
-  // floating-point round-up from crossing the user's AUD ceiling.
-  const long double raw = static_cast<long double>(audBudget) /
-                          static_cast<long double>(maxPrice) * 100000000.0L;
+  // floating-point round-up from taking the trade value plus the fee
+  // allowance across the user's AUD ceiling.
+  const long double perBtc = static_cast<long double>(maxPrice) * (1.0L + feeRate);
+  const long double raw = static_cast<long double>(audBudget) / perBtc * 100000000.0L;
   const long double nearest = std::round(raw);
   auto satoshis = std::floor(std::abs(raw - nearest) < 0.0000001L ? nearest : raw);
-  while (satoshis > 0 && satoshis * static_cast<long double>(maxPrice) / 100000000.0L >
-                              static_cast<long double>(audBudget))
+  while (satoshis > 0 && satoshis * perBtc / 100000000.0L > static_cast<long double>(audBudget))
     --satoshis;
   return static_cast<double>(satoshis / 100000000.0L);
 }
 
-double Buyer::spendWithFeeReserve(double availableAud) {
-  if (!std::isfinite(availableAud) || availableAud <= 0) return 0;
-  // Keep enough AUD for a 0.1% fee if CoinSpot charges it on top of the trade.
-  // Round down to cents so the suggested ceiling never exceeds that reserve.
-  const long double funds = static_cast<long double>(availableAud);
-  auto cents = std::floor(funds / 1.001L * 100.0L);
-  while (cents > 0 && cents / 100.0L * 1.001L > funds) --cents;
-  return static_cast<double>(cents / 100.0L);
+double Buyer::wholeCents(double aud) {
+  if (!std::isfinite(aud) || aud <= 0) return 0;
+  return static_cast<double>(std::floor(static_cast<long double>(aud) * 100.0L + 0.0000001L) / 100.0L);
 }
 
 double Buyer::recommendedCap(QVector<AskLevel> asks, double audBudget) {
@@ -74,9 +70,8 @@ double Buyer::recommendedCap(QVector<AskLevel> asks, double audBudget) {
     if (!std::isfinite(level.rate) || !std::isfinite(level.amount) ||
         level.rate <= 0 || level.amount <= 0) continue;
     cumulativeBtc += level.amount;
-    if (cumulativeBtc >= static_cast<long double>(coinAmount(audBudget, level.rate)) &&
-        coinAmount(audBudget, level.rate) > 0)
-      return level.rate;
+    const double needed = coinAmount(audBudget, level.rate, kMarketsFeeRate);
+    if (needed > 0 && cumulativeBtc >= static_cast<long double>(needed)) return level.rate;
   }
   return 0;
 }
@@ -151,6 +146,7 @@ void Buyer::loadOrders() {
   m_openOrders = {};
   m_ordersLoaded = false;
   m_journalProblem = false;
+  m_journalUnsaved = false;
   m_uncertainBuy = false;
   m_uncertainRefreshed = false;
   m_reviewRequested = false;
@@ -191,9 +187,20 @@ void Buyer::updateOrder(const QString &id, const QString &state, const QJsonObje
     if (modified) m_orders.replace(i, order);
   }
   if (id == m_lastOrderId) m_orderState = state;
-  if (modified && !m_orderPath.isEmpty() && !OrderStore::save(m_orderPath, m_orders))
+  if ((modified || m_journalUnsaved) && !saveOrders())
     setStatus(QStringLiteral("Could not save local order history. Check CoinSpot for the authoritative status."));
   emit changed();
+}
+
+bool Buyer::saveOrders() {
+  m_journalUnsaved = m_orderPath.isEmpty() || !OrderStore::save(m_orderPath, m_orders);
+  return !m_journalUnsaved;
+}
+
+void Buyer::retrySaveJournal() {
+  if (!m_journalUnsaved) return;
+  if (saveOrders()) setStatus(QStringLiteral("Local order history saved. Buying is available again."));
+  else setStatus(QStringLiteral("Could not save local order history. Buying remains blocked; check that %1 is writable.").arg(m_orderPath));
 }
 
 void Buyer::removeAttempt(const QString &attemptId) {
@@ -254,7 +261,7 @@ void Buyer::clearCredentials() {
   m_lastOrderId.clear(); m_lastOrderDate.clear(); m_orderState.clear();
   m_orders = {}; m_openOrders = {}; m_orderPath.clear();
   m_ordersLoaded = false;
-  m_journalProblem = false;
+  m_journalProblem = false; m_journalUnsaved = false;
   m_uncertainBuy = false; m_uncertainRefreshed = false; m_reviewRequested = false;
   setStatus(QStringLiteral("API key cleared"));
 }
@@ -397,13 +404,14 @@ void Buyer::fetchBook(double budget, bool forPreview) {
 bool Buyer::prepare(const QString &aud, const QString &maxPrice) {
   if (m_busy || m_previewLoading) { setStatus(QStringLiteral("An order or price check is already in progress")); return false; }
   if (m_journalProblem) { setStatus(QStringLiteral("The local order journal is unreadable. Buying is blocked; check the journal warning below.")); return false; }
+  if (m_journalUnsaved) { setStatus(QStringLiteral("The latest order update is not saved in local history yet. Save it before placing another order.")); return false; }
   if (m_uncertainBuy) { setStatus(QStringLiteral("Review and acknowledge the uncertain buy request before placing another order.")); return false; }
   if (!connected()) { setStatus(QStringLiteral("Add your CoinSpot API key first")); return false; }
   if (!readOnlyReady()) { setStatus(QStringLiteral("Add a read-only API key for the balance check first")); return false; }
   if (!keysVerified()) { setStatus(QStringLiteral("Verify both CoinSpot API keys before buying. Use Account → Retry API checks if needed.")); return false; }
   if (!parseMoney(aud, 2, &m_budget)) { setStatus(QStringLiteral("Enter an AUD amount with up to two decimals")); return false; }
   if (!parseMoney(maxPrice, 8, &m_maxPrice)) { setStatus(QStringLiteral("Enter a positive maximum BTC price in AUD")); return false; }
-  m_amount = coinAmount(m_budget, m_maxPrice);
+  m_amount = coinAmount(m_budget, m_maxPrice, kMarketsFeeRate);
   if (m_amount < 0.00000001) { setStatus(QStringLiteral("The amount is too small for this maximum price")); return false; }
   m_previewLoading = true;
   setStatus(QStringLiteral("Refreshing the BTC/AUD order book for confirmation…"));
@@ -422,12 +430,16 @@ QString Buyer::preview() const {
                 .arg(m_bookAt.toLocalTime().toString(QStringLiteral("HH:mm:ss")),
                      QString::number(m_bestAskValue, 'f', 2)))
       : QStringLiteral("The new order book request failed or its quote is stale; immediate fill is unknown.");
+  const double tradeValue = m_amount * m_maxPrice;
   return QStringLiteral("Buy %1 BTC at no more than A$%2 per BTC?\n\n"
-                        "Maximum AUD spend: A$%3.\n"
-                        "CoinSpot lists a 0.1% Markets fee; check its final trade record for the fee and net BTC.\n\n"
-                        "%4\n\nAvailable AUD will be checked before submission. The order may fill partly.")
+                        "Maximum trade value: A$%3.\n"
+                        "With CoinSpot's listed 0.1% Markets fee: up to A$%4, within your A$%5 limit. "
+                        "Check CoinSpot's final trade record for the fee and net BTC.\n\n"
+                        "%6\n\nAvailable AUD will be checked before submission. The order may fill partly.")
       .arg(QString::number(m_amount, 'f', 8), QString::number(m_maxPrice, 'f', 8),
-           QString::number(m_amount * m_maxPrice, 'f', 2), marketContext);
+           QString::number(tradeValue, 'f', 2),
+           QString::number(tradeValue * (1.0 + kMarketsFeeRate), 'f', 2),
+           QString::number(m_budget, 'f', 2), marketContext);
 }
 
 QNetworkReply *Buyer::postPrivate(const QString &endpoint, const QJsonObject &fields, bool readOnly) {
@@ -485,12 +497,14 @@ void Buyer::suggestAvailableSpend() {
     } else {
       const double funds = available.toDouble();
       m_availableAud = QString::number(funds, 'f', 2);
-      const double spend = spendWithFeeReserve(funds);
+      // The order size already leaves room for the fee, so the whole balance
+      // can be the ceiling.
+      const double spend = wholeCents(funds);
       if (spend < 0.01) {
-        setStatus(QStringLiteral("Available AUD is too small for a spend suggestion after the fee allowance."));
+        setStatus(QStringLiteral("Available AUD is too small for a spend suggestion."));
       } else {
         emit suggestedSpendReady(QString::number(spend, 'f', 2));
-        setStatus(QStringLiteral("AUD amount set from your available balance with a 0.1% fee allowance. Review it before buying."));
+        setStatus(QStringLiteral("AUD amount set from your available balance. The order leaves room for the 0.1% fee. Review it before buying."));
       }
     }
     reply->deleteLater();
@@ -498,7 +512,7 @@ void Buyer::suggestAvailableSpend() {
 }
 
 void Buyer::submit() {
-  if (m_busy || m_previewLoading || m_journalProblem || m_uncertainBuy || !keysVerified() || m_amount <= 0) return;
+  if (m_busy || m_previewLoading || m_journalProblem || m_journalUnsaved || m_uncertainBuy || !keysVerified() || m_amount <= 0) return;
   m_busy = true;
   setStatus(QStringLiteral("Checking available AUD…"));
   auto *reply = postPrivate(QStringLiteral("ro/my/balance/AUD?available=yes"), {}, true);
@@ -514,7 +528,7 @@ void Buyer::submit() {
     } else {
       const double funds = available.toDouble();
       m_availableAud = QString::number(funds, 'f', 2);
-      const double required = m_amount * m_maxPrice;
+      const double required = m_amount * m_maxPrice * (1.0 + kMarketsFeeRate);
       if (!std::isfinite(funds) || funds + 0.000001 < required) {
         m_busy = false;
         setStatus(QStringLiteral("Insufficient available AUD: A$%1 needed, A$%2 available. No order was submitted.")
@@ -573,8 +587,8 @@ void Buyer::placePreparedOrder() {
         break;
       }
       m_uncertainBuy = false;
-      if (m_orderPath.isEmpty() || !OrderStore::save(m_orderPath, m_orders))
-        setStatus(QStringLiteral("Order accepted by CoinSpot: %1. Could not update local history; check CoinSpot after restarting.").arg(m_lastOrderId));
+      if (!saveOrders())
+        setStatus(QStringLiteral("Order accepted by CoinSpot: %1. Could not save it to local history, so buying stays blocked until it is saved.").arg(m_lastOrderId));
       else
         setStatus(QStringLiteral("Order accepted by CoinSpot: %1").arg(m_lastOrderId));
       m_orderPoll.start();
@@ -594,7 +608,7 @@ void Buyer::placePreparedOrder() {
         m_orders.replace(i, order);
         break;
       }
-      if (!m_orderPath.isEmpty()) OrderStore::save(m_orderPath, m_orders);
+      saveOrders();
       setStatus(QStringLiteral("Buy request outcome unknown. Refresh orders and review CoinSpot before another buy."));
     }
     reply->deleteLater();
@@ -620,6 +634,13 @@ QString Buyer::describeOrder(const QJsonArray &openOrders, const QJsonArray &com
   if (filled > 0)
     return QStringLiteral("Partly filled: %1 BTC recorded; remainder no longer open.").arg(QString::number(filled, 'f', 8));
   return QStringLiteral("No open order or matching fill found. Check CoinSpot for cancellation or delayed history.");
+}
+
+bool Buyer::keepsRecordedFill(const QJsonObject &order, const QJsonObject &fills) {
+  // Completed-order history is capped at 500 records, so an old fill can drop
+  // out of the response. Never let a smaller result replace a recorded fill.
+  const double recorded = order.value(QStringLiteral("filledBtc")).toDouble();
+  return recorded > 0 && fills.value(QStringLiteral("filledBtc")).toDouble() + 0.000000005 < recorded;
 }
 
 QJsonObject Buyer::fillSummary(const QJsonArray &completedOrders, const QString &orderId) {
@@ -679,6 +700,7 @@ void Buyer::acknowledgeUncertainBuy() {
     return;
   }
   m_orders = reviewed;
+  m_journalUnsaved = false;
   m_uncertainBuy = false;
   m_uncertainRefreshed = false;
   m_reviewRequested = false;
@@ -716,7 +738,12 @@ void Buyer::refreshOrderStatus() {
     QJsonObject historyFields = fields;
     QString earliestDate;
     for (const auto &entry : m_orders) {
-      const QString date = entry.toObject().value(QStringLiteral("date")).toString();
+      const QJsonObject order = entry.toObject();
+      // Fully filled orders cannot change, so they need not widen the history window.
+      if (order.value(QStringLiteral("filledBtc")).toDouble() + 0.000000005 >=
+          order.value(QStringLiteral("amount")).toDouble() &&
+          order.value(QStringLiteral("filledBtc")).toDouble() > 0) continue;
+      const QString date = order.value(QStringLiteral("date")).toString();
       if (!date.isEmpty() && (earliestDate.isEmpty() || date < earliestDate)) earliestDate = date;
     }
     if (!earliestDate.isEmpty()) historyFields.insert(QStringLiteral("startdate"), earliestDate);
@@ -735,9 +762,12 @@ void Buyer::refreshOrderStatus() {
         for (const auto &entry : trackedOrders) {
           const QJsonObject order = entry.toObject();
           const QString id = order.value(QStringLiteral("id")).toString();
-          if (!id.isEmpty()) updateOrder(id, describeOrder(m_openOrders, completed, id,
-                                                           order.value(QStringLiteral("amount")).toDouble()),
-                                         fillSummary(completed, id));
+          if (id.isEmpty()) continue;
+          const QJsonObject fills = fillSummary(completed, id);
+          if (keepsRecordedFill(order, fills)) continue;
+          updateOrder(id, describeOrder(m_openOrders, completed, id,
+                                        order.value(QStringLiteral("amount")).toDouble()),
+                      fills);
         }
         if (m_reviewRequested && m_uncertainBuy) {
           m_uncertainRefreshed = true;
