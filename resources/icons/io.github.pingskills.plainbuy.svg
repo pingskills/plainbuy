@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <title>PlainBuy</title>
+  <rect x="8" y="8" width="112" height="112" rx="24" fill="#1e2b29"/>
+  <circle cx="64" cy="64" r="36" fill="none" stroke="#ece7dc" stroke-width="8"/>
+  <path d="M52 43h20c14 0 14 18 0 18H52m0 0h22c16 0 16 23 0 23H52M59 37v54m12-54v54" fill="none" stroke="#f0a04b" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

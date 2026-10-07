@@ -1,0 +1,2 @@
+#pragma once
+#define PLAINBUY_VERSION "@PROJECT_VERSION@"

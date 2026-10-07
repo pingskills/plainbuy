@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=PlainBuy
+GenericName=Bitcoin Buyer
+Comment=Place a Bitcoin buy order on CoinSpot Markets
+Exec=plainbuy
+Icon=io.github.pingskills.plainbuy
+Terminal=false
+Categories=Office;Finance;
+Keywords=bitcoin;btc;coinspot;buy;
+StartupNotify=true
+StartupWMClass=io.github.pingskills.plainbuy
