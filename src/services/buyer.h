@@ -6,6 +6,7 @@
 #include <QJsonArray>
 #include <QObject>
 #include <QTimer>
+#include <QVariantMap>
 #include <QVector>
 
 namespace pb {
@@ -24,10 +25,13 @@ class Buyer : public QObject {
   Q_PROPERTY(bool previewLoading READ previewLoading NOTIFY changed)
   Q_PROPERTY(QString status READ status NOTIFY changed)
   Q_PROPERTY(QString bestAsk READ bestAsk NOTIFY changed)
-  Q_PROPERTY(QString recommendedPrice READ recommendedPrice NOTIFY recommendedPriceChanged)
   Q_PROPERTY(QString marketSpread READ marketSpread NOTIFY changed)
   Q_PROPERTY(QString lastOrderId READ lastOrderId NOTIFY changed)
   Q_PROPERTY(QString availableAud READ availableAud NOTIFY changed)
+  Q_PROPERTY(QString spendableAud READ spendableAud NOTIFY changed)
+  Q_PROPERTY(QString balanceUpdated READ balanceUpdated NOTIFY changed)
+  Q_PROPERTY(QString bookUpdated READ bookUpdated NOTIFY changed)
+  Q_PROPERTY(QString buyBlockedReason READ buyBlockedReason NOTIFY changed)
   Q_PROPERTY(QString orderState READ orderState NOTIFY changed)
   Q_PROPERTY(QVariantList openOrders READ openOrders NOTIFY changed)
   Q_PROPERTY(QVariantList orderHistory READ orderHistory NOTIFY changed)
@@ -53,10 +57,15 @@ public:
   bool previewLoading() const { return m_previewLoading; }
   QString status() const { return m_status; }
   QString bestAsk() const { return m_bestAsk; }
-  QString recommendedPrice() const { return m_recommendedPrice; }
   QString marketSpread() const { return m_marketSpread; }
   QString lastOrderId() const { return m_lastOrderId; }
-  QString availableAud() const { return m_availableAud; }
+  QString availableAud() const {
+    return m_availableAudValue >= 0 ? QString::number(wholeCents(m_availableAudValue), 'f', 2) : QString();
+  }
+  QString spendableAud() const;
+  QString balanceUpdated() const { return m_balanceAt.isValid() ? m_balanceAt.toLocalTime().toString(QStringLiteral("HH:mm:ss")) : QString(); }
+  QString bookUpdated() const { return m_bookAt.isValid() ? m_bookAt.toLocalTime().toString(QStringLiteral("HH:mm:ss")) : QString(); }
+  QString buyBlockedReason() const;
   QString orderState() const { return m_orderState; }
   QVariantList openOrders() const { return m_openOrders.toVariantList(); }
   QVariantList orderHistory() const { return m_orders.toVariantList(); }
@@ -75,16 +84,16 @@ public:
   Q_INVOKABLE void unlockCredentials(const QString &passphrase);
   Q_INVOKABLE void forgetSavedCredentials();
   Q_INVOKABLE void refreshBestAsk();
-  Q_INVOKABLE void recommend(const QString &aud);
-  Q_INVOKABLE void refreshBalance();
-  Q_INVOKABLE void suggestAvailableSpend();
+  Q_INVOKABLE void refreshBalance(bool force = false);
   Q_INVOKABLE void refreshOrderStatus();
   Q_INVOKABLE void reviewUncertainBuy();
   Q_INVOKABLE void acknowledgeUncertainBuy();
   Q_INVOKABLE void retrySaveJournal();
   Q_INVOKABLE void cancelOrder(const QString &id);
-  Q_INVOKABLE bool prepare(const QString &aud, const QString &maxPrice);
-  Q_INVOKABLE QString preview() const;
+  Q_INVOKABLE bool prepare(const QString &aud, const QString &maxPrice, bool followMarket = false);
+  Q_INVOKABLE QVariantMap preview() const;
+  Q_INVOKABLE QString marketPriceFor(const QString &aud) const;
+  Q_INVOKABLE QVariantMap quote(const QString &aud, const QString &price) const;
   Q_INVOKABLE void submit();
   static bool parseMoney(const QString &text, int maxDecimals, double *value);
   // CoinSpot's listed Markets fee, reserved in case it is charged in AUD on top of the trade.
@@ -92,6 +101,8 @@ public:
   static double coinAmount(double audBudget, double maxPrice, double feeRate = 0);
   static double wholeCents(double aud);
   static double recommendedCap(QVector<AskLevel> asks, double audBudget);
+  static double currentPrice(const QVector<AskLevel> &asks, double audBudget);
+  static QVariantMap quoteFor(const QString &aud, const QString &price, double availableAud, double bestAsk);
   static QString describeOrder(const QJsonArray &openOrders,
                                const QJsonArray &completedOrders,
                                const QString &orderId, double requestedAmount);
@@ -100,12 +111,13 @@ public:
   static bool apiStatusOkay(const QJsonObject &response);
 signals:
   void changed();
-  void recommendedPriceChanged();
+  void marketUpdated();
   void previewReady();
-  void suggestedSpendReady(const QString &amount);
 private:
   void setStatus(const QString &value);
-  void fetchBook(double budget, bool forPreview = false);
+  void fetchBook(bool forPreview = false);
+  void finishPreview();
+  bool bookFresh() const;
   QNetworkReply *postPrivate(const QString &endpoint, const QJsonObject &fields, bool readOnly);
   void placePreparedOrder();
   void loadOrders();
@@ -121,7 +133,8 @@ private:
   bool m_busy = false;
   bool m_previewLoading = false;
   bool m_statusBusy = false;
-  bool m_balanceSuggestionLoading = false;
+  bool m_balanceLoading = false;
+  bool m_followMarket = false;
   bool m_hasSavedCredentials = false;
   bool m_fullKeyVerified = false;
   bool m_readKeyVerified = false;
@@ -140,14 +153,19 @@ private:
   double m_amount = 0;
   double m_lastOrderAmount = 0;
   QString m_status, m_bestAsk, m_lastOrderId;
-  QString m_availableAud, m_orderState;
+  QString m_orderState;
+  double m_availableAudValue = -1;
+  QDateTime m_balanceAt;
   QString m_lastOrderDate;
   QString m_orderPath;
   QJsonArray m_orders, m_openOrders;
-  QString m_recommendedPrice, m_marketSpread;
+  QString m_marketSpread;
+  QVector<AskLevel> m_askLevels;
   double m_bestAskValue = 0;
   QDateTime m_bookAt;
   quint64 m_bookRequestSerial = 0;
+  quint64 m_balanceSerial = 0;
   QTimer m_orderPoll;
+  QTimer m_bookPoll;
 };
 } // namespace pb

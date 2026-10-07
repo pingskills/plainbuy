@@ -54,6 +54,42 @@ private slots:
     QCOMPARE(pb::Buyer::recommendedCap(asks, 500), 0.0);
     QCOMPARE(pb::Buyer::recommendedCap({{0, 99}, {-1, 1}}, 100), 0.0);
   }
+  void currentPriceRoundsUpToCoveringLevel() {
+    const QVector<pb::AskLevel> asks{{100000.004, 0.0005}, {101000.123, 0.01}};
+    QCOMPARE(pb::Buyer::currentPrice(asks, 40), 100000.01);
+    QCOMPARE(pb::Buyer::currentPrice(asks, 100), 101000.13);
+    QCOMPARE(pb::Buyer::currentPrice(asks, 5000), 0.0);
+    const QVector<pb::AskLevel> exact{{100000.0, 1.0}};
+    QCOMPARE(pb::Buyer::currentPrice(exact, 100), 100000.0);
+    // The rounded-up price still buys no more BTC than the covering level holds.
+    QVERIFY(pb::Buyer::coinAmount(100, 101000.13, pb::Buyer::kMarketsFeeRate) <= 0.0105);
+  }
+  void quotesOrdersWithFeeAndBalance() {
+    const QVariantMap okay = pb::Buyer::quoteFor("100", "100000", 250, 99000);
+    QVERIFY(okay.value("valid").toBool());
+    const double btc = okay.value("btc").toDouble();
+    QCOMPARE(btc, pb::Buyer::coinAmount(100, 100000, pb::Buyer::kMarketsFeeRate));
+    QVERIFY(okay.value("total").toDouble() <= 100.0);
+    QCOMPARE(okay.value("fee").toDouble(), okay.value("tradeValue").toDouble() * 0.001);
+    QVERIFY(okay.value("askKnown").toBool());
+    QVERIFY(okay.value("reachesAsk").toBool());
+    QVERIFY(!pb::Buyer::quoteFor("100", "98000", -1, 99000).value("reachesAsk").toBool());
+    QVERIFY(!pb::Buyer::quoteFor("100", "98000", -1, 0).value("askKnown").toBool());
+    const QVariantMap over = pb::Buyer::quoteFor("300", "100000", 250, 0);
+    QVERIFY(!over.value("valid").toBool());
+    QVERIFY(over.value("error").toString().contains("250.00"));
+    QVERIFY(over.contains("btc"));
+    QCOMPARE(pb::Buyer::quoteFor("", "100000", -1, 0).value("error").toString(), QString("Enter an amount in AUD."));
+    QCOMPARE(pb::Buyer::quoteFor("0.00", "100000", -1, 0).value("error").toString(), QString("No AUD to spend."));
+    QVERIFY(!pb::Buyer::quoteFor("1.234", "100000", -1, 0).value("valid").toBool());
+    QCOMPARE(pb::Buyer::quoteFor("100", "", -1, 0).value("error").toString(), QString("No current price for this amount yet."));
+    QVERIFY(!pb::Buyer::quoteFor("100", "abc", -1, 0).value("valid").toBool());
+    QVERIFY(!pb::Buyer::quoteFor("0.01", "100000000", -1, 0).value("valid").toBool());
+  }
+  void blockedReasonExplainsMissingKeys() {
+    pb::Buyer buyer;
+    QVERIFY(!buyer.buyBlockedReason().isEmpty());
+  }
   void reportsOrderProgressConservatively() {
     const QJsonArray open{QJsonObject{{"id", "order-1"}}};
     const QJsonArray partial{QJsonObject{{"id", "order-1"}, {"amount", 0.004}}};

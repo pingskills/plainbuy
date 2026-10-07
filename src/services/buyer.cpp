@@ -18,7 +18,15 @@ namespace pb {
 Buyer::Buyer(QObject *parent) : QObject(parent) {
   m_hasSavedCredentials = CredentialStore::exists(CredentialStore::defaultPath());
   m_orderPoll.setInterval(15000);
-  connect(&m_orderPoll, &QTimer::timeout, this, &Buyer::refreshOrderStatus);
+  connect(&m_orderPoll, &QTimer::timeout, this, [this] {
+    refreshOrderStatus();
+    refreshBalance();
+  });
+  m_bookPoll.setInterval(15000);
+  connect(&m_bookPoll, &QTimer::timeout, this, [this] {
+    if (!m_busy && !m_previewLoading) fetchBook();
+  });
+  m_bookPoll.start();
 }
 Buyer::~Buyer() {
   if (!m_key.isEmpty()) sodium_memzero(m_key.data(), static_cast<size_t>(m_key.size()));
@@ -58,6 +66,59 @@ double Buyer::coinAmount(double audBudget, double maxPrice, double feeRate) {
 double Buyer::wholeCents(double aud) {
   if (!std::isfinite(aud) || aud <= 0) return 0;
   return static_cast<double>(std::floor(static_cast<long double>(aud) * 100.0L + 0.0000001L) / 100.0L);
+}
+
+double Buyer::currentPrice(const QVector<AskLevel> &asks, double audBudget) {
+  const double cap = recommendedCap(asks, audBudget);
+  if (cap <= 0) return 0;
+  // Round up to the cent so the order still reaches the covering ask level.
+  return static_cast<double>(std::ceil(static_cast<long double>(cap) * 100.0L - 0.0000001L) / 100.0L);
+}
+
+QVariantMap Buyer::quoteFor(const QString &aud, const QString &price, double availableAud, double bestAsk) {
+  QVariantMap quote{{QStringLiteral("valid"), false}};
+  double budget = 0, maxPrice = 0;
+  const QString amountText = aud.trimmed();
+  if (amountText.isEmpty()) {
+    quote.insert(QStringLiteral("error"), QStringLiteral("Enter an amount in AUD."));
+    return quote;
+  }
+  if (!parseMoney(amountText, 2, &budget)) {
+    bool numeric = false;
+    const double value = QString(amountText).replace(QLatin1Char(','), QLatin1Char('.')).toDouble(&numeric);
+    quote.insert(QStringLiteral("error"), numeric && value == 0
+        ? QStringLiteral("No AUD to spend.")
+        : QStringLiteral("Enter an AUD amount with up to two decimals."));
+    return quote;
+  }
+  if (price.trimmed().isEmpty()) {
+    quote.insert(QStringLiteral("error"), QStringLiteral("No current price for this amount yet."));
+    return quote;
+  }
+  if (!parseMoney(price, 8, &maxPrice)) {
+    quote.insert(QStringLiteral("error"), QStringLiteral("Enter a positive price per BTC in AUD."));
+    return quote;
+  }
+  const double btc = coinAmount(budget, maxPrice, kMarketsFeeRate);
+  if (btc < 0.00000001) {
+    quote.insert(QStringLiteral("error"), QStringLiteral("The amount is too small for this price."));
+    return quote;
+  }
+  const double tradeValue = btc * maxPrice;
+  const double fee = tradeValue * kMarketsFeeRate;
+  quote.insert(QStringLiteral("btc"), btc);
+  quote.insert(QStringLiteral("tradeValue"), tradeValue);
+  quote.insert(QStringLiteral("fee"), fee);
+  quote.insert(QStringLiteral("total"), tradeValue + fee);
+  quote.insert(QStringLiteral("askKnown"), bestAsk > 0);
+  quote.insert(QStringLiteral("reachesAsk"), bestAsk > 0 && maxPrice >= bestAsk);
+  if (availableAud >= 0 && budget > availableAud + 0.000001) {
+    quote.insert(QStringLiteral("error"), QStringLiteral("More than your available A$%1.")
+                                              .arg(QString::number(wholeCents(availableAud), 'f', 2)));
+    return quote;
+  }
+  quote.insert(QStringLiteral("valid"), true);
+  return quote;
 }
 
 double Buyer::recommendedCap(QVector<AskLevel> asks, double audBudget) {
@@ -234,7 +295,7 @@ void Buyer::setReadOnlyCredentials(const QString &key, const QString &secret) {
   m_openOrders = {};
   m_ordersLoaded = false;
   m_uncertainRefreshed = false; m_reviewRequested = false;
-  m_availableAud.clear();
+  m_availableAudValue = -1; m_balanceAt = {};
   if (!m_readKey.isEmpty()) sodium_memzero(m_readKey.data(), static_cast<size_t>(m_readKey.size()));
   if (!m_readSecret.isEmpty()) sodium_memzero(m_readSecret.data(), static_cast<size_t>(m_readSecret.size()));
   m_readKey = key.trimmed().toUtf8();
@@ -256,7 +317,7 @@ void Buyer::clearCredentials() {
   m_fullKeyVerified = false; m_readKeyVerified = false;
   m_fullKeyStatus = QStringLiteral("Not entered");
   m_readKeyStatus = QStringLiteral("Not entered");
-  m_availableAud.clear();
+  m_availableAudValue = -1; m_balanceAt = {};
   m_orderPoll.stop();
   m_lastOrderId.clear(); m_lastOrderDate.clear(); m_orderState.clear();
   m_orders = {}; m_openOrders = {}; m_orderPath.clear();
@@ -321,24 +382,45 @@ void Buyer::forgetSavedCredentials() {
   setStatus(QStringLiteral("Encrypted credential file removed; current session key remains active"));
 }
 
-void Buyer::refreshBestAsk() { fetchBook(0); }
+void Buyer::refreshBestAsk() { fetchBook(); }
 
-void Buyer::recommend(const QString &aud) {
-  double budget = 0;
-  if (!parseMoney(aud, 2, &budget)) {
-    setStatus(QStringLiteral("Enter an AUD amount before requesting a price"));
-    return;
-  }
-  fetchBook(budget);
+bool Buyer::bookFresh() const {
+  return m_bookAt.isValid() && m_bookAt.secsTo(QDateTime::currentDateTimeUtc()) <= 60;
 }
 
-void Buyer::fetchBook(double budget, bool forPreview) {
+QString Buyer::spendableAud() const {
+  return m_availableAudValue >= 0 ? QString::number(wholeCents(m_availableAudValue), 'f', 2) : QString();
+}
+
+QString Buyer::marketPriceFor(const QString &aud) const {
+  double budget = 0;
+  if (!bookFresh() || !parseMoney(aud, 2, &budget)) return {};
+  const double price = currentPrice(m_askLevels, budget);
+  return price > 0 ? QString::number(price, 'f', 2) : QString();
+}
+
+QVariantMap Buyer::quote(const QString &aud, const QString &price) const {
+  return quoteFor(aud, price, m_availableAudValue, bookFresh() ? m_bestAskValue : 0);
+}
+
+QString Buyer::buyBlockedReason() const {
+  if (!connected() || !readOnlyReady())
+    return m_hasSavedCredentials && !connected() ? QStringLiteral("Unlock your saved API keys to buy.")
+                                                 : QStringLiteral("Add your CoinSpot API keys to buy.");
+  if (!keysVerified()) return QStringLiteral("Waiting for CoinSpot to verify both API keys.");
+  if (m_journalProblem) return QStringLiteral("Buying is blocked: the local order journal is unreadable.");
+  if (m_journalUnsaved) return QStringLiteral("Buying is blocked until the latest order update is saved.");
+  if (m_uncertainBuy) return QStringLiteral("Buying is blocked until you review the earlier buy below.");
+  return {};
+}
+
+void Buyer::fetchBook(bool forPreview) {
   if (m_previewLoading && !forPreview) return;
   const quint64 serial = ++m_bookRequestSerial;
   QNetworkRequest request(QUrl(QStringLiteral("https://www.coinspot.com.au/pubapi/v2/orders/open/BTC")));
   request.setTransferTimeout(10000);
   auto *reply = m_network.get(request);
-  connect(reply, &QNetworkReply::finished, this, [this, reply, budget, serial, forPreview] {
+  connect(reply, &QNetworkReply::finished, this, [this, reply, serial, forPreview] {
     if (serial != m_bookRequestSerial) {
       if (forPreview) { m_previewLoading = false; emit changed(); }
       reply->deleteLater();
@@ -367,41 +449,50 @@ void Buyer::fetchBook(double budget, bool forPreview) {
         const double rate = entry.toObject().value(QStringLiteral("rate")).toDouble();
         if (std::isfinite(rate) && rate > highestBid) highestBid = rate;
       }
+      m_askLevels = levels;
       m_bestAsk = std::isfinite(lowest) ? QString::number(lowest, 'f', 2) : QString();
       m_bestAskValue = std::isfinite(lowest) ? lowest : 0;
       m_bookAt = QDateTime::currentDateTimeUtc();
       m_marketSpread = highestBid > 0 && std::isfinite(lowest)
                            ? QString::number((lowest / highestBid - 1.0) * 100.0, 'f', 2) + QLatin1Char('%')
                            : QString();
-      if (budget > 0) {
-        const double cap = recommendedCap(levels, budget);
-        m_recommendedPrice = cap > 0 ? QString::number(cap, 'f', 8) : QString();
-        emit recommendedPriceChanged();
-        setStatus(cap > 0
-                      ? QStringLiteral("Suggested cap from the current CoinSpot order book. Quotes can change before an order fills.")
-                      : QStringLiteral("The visible CoinSpot sell orders do not cover this amount; no price suggested."));
-      }
-      if (forPreview) setStatus(QStringLiteral("Current order book loaded; review the confirmation."));
     } else {
+      // A stale book must not drive an automatic price.
+      m_askLevels.clear();
       m_bestAsk.clear();
       m_bestAskValue = 0;
       m_bookAt = {};
       m_marketSpread.clear();
-      if (budget > 0) {
-        m_recommendedPrice.clear();
-        emit recommendedPriceChanged();
-        setStatus(QStringLiteral("Could not load the CoinSpot order book. Try again later."));
-      }
-      if (forPreview) setStatus(QStringLiteral("Could not refresh the order book; the confirmation will flag the missing quote."));
     }
-    if (forPreview) m_previewLoading = false;
     emit changed();
-    if (forPreview) emit previewReady();
+    emit marketUpdated();
+    if (forPreview) finishPreview();
     reply->deleteLater();
   });
 }
 
-bool Buyer::prepare(const QString &aud, const QString &maxPrice) {
+void Buyer::finishPreview() {
+  m_previewLoading = false;
+  if (m_followMarket) {
+    m_maxPrice = currentPrice(m_askLevels, m_budget);
+    m_amount = m_maxPrice > 0 ? coinAmount(m_budget, m_maxPrice, kMarketsFeeRate) : 0;
+    if (m_maxPrice <= 0) {
+      setStatus(m_askLevels.isEmpty()
+                    ? QStringLiteral("Could not load the CoinSpot order book. No order was prepared.")
+                    : QStringLiteral("CoinSpot's visible sell orders do not cover this amount. No order was prepared."));
+      return;
+    }
+    if (m_amount < 0.00000001) {
+      setStatus(QStringLiteral("The amount is too small for the current price."));
+      return;
+    }
+  }
+  setStatus(bookFresh() ? QStringLiteral("Current order book loaded; review the confirmation.")
+                        : QStringLiteral("Could not refresh the order book; the confirmation will flag the missing quote."));
+  emit previewReady();
+}
+
+bool Buyer::prepare(const QString &aud, const QString &maxPrice, bool followMarket) {
   if (m_busy || m_previewLoading) { setStatus(QStringLiteral("An order or price check is already in progress")); return false; }
   if (m_journalProblem) { setStatus(QStringLiteral("The local order journal is unreadable. Buying is blocked; check the journal warning below.")); return false; }
   if (m_journalUnsaved) { setStatus(QStringLiteral("The latest order update is not saved in local history yet. Save it before placing another order.")); return false; }
@@ -410,36 +501,36 @@ bool Buyer::prepare(const QString &aud, const QString &maxPrice) {
   if (!readOnlyReady()) { setStatus(QStringLiteral("Add a read-only API key for the balance check first")); return false; }
   if (!keysVerified()) { setStatus(QStringLiteral("Verify both CoinSpot API keys before buying. Use Account → Retry API checks if needed.")); return false; }
   if (!parseMoney(aud, 2, &m_budget)) { setStatus(QStringLiteral("Enter an AUD amount with up to two decimals")); return false; }
-  if (!parseMoney(maxPrice, 8, &m_maxPrice)) { setStatus(QStringLiteral("Enter a positive maximum BTC price in AUD")); return false; }
-  m_amount = coinAmount(m_budget, m_maxPrice, kMarketsFeeRate);
-  if (m_amount < 0.00000001) { setStatus(QStringLiteral("The amount is too small for this maximum price")); return false; }
+  m_followMarket = followMarket;
+  m_amount = 0;
+  if (!followMarket) {
+    if (!parseMoney(maxPrice, 8, &m_maxPrice)) { setStatus(QStringLiteral("Enter a positive maximum BTC price in AUD")); return false; }
+    m_amount = coinAmount(m_budget, m_maxPrice, kMarketsFeeRate);
+    if (m_amount < 0.00000001) { setStatus(QStringLiteral("The amount is too small for this maximum price")); return false; }
+  }
   m_previewLoading = true;
-  setStatus(QStringLiteral("Refreshing the BTC/AUD order book for confirmation…"));
-  fetchBook(0, true);
+  setStatus(QStringLiteral("Getting the current BTC/AUD price for confirmation…"));
+  fetchBook(true);
   return true;
 }
 
-QString Buyer::preview() const {
-  const QString marketContext = m_bestAskValue > 0 && m_bookAt.isValid() &&
-      m_bookAt.secsTo(QDateTime::currentDateTimeUtc()) <= 30
-      ? (m_maxPrice >= m_bestAskValue
-          ? QStringLiteral("The refreshed ask at %1 was A$%2. Your price reaches it, so this may fill immediately.")
-                .arg(m_bookAt.toLocalTime().toString(QStringLiteral("HH:mm:ss")),
-                     QString::number(m_bestAskValue, 'f', 2))
-          : QStringLiteral("The refreshed ask at %1 was A$%2. Your price is below it, so the order may stay open.")
-                .arg(m_bookAt.toLocalTime().toString(QStringLiteral("HH:mm:ss")),
-                     QString::number(m_bestAskValue, 'f', 2)))
-      : QStringLiteral("The new order book request failed or its quote is stale; immediate fill is unknown.");
+QVariantMap Buyer::preview() const {
   const double tradeValue = m_amount * m_maxPrice;
-  return QStringLiteral("Buy %1 BTC at no more than A$%2 per BTC?\n\n"
-                        "Maximum trade value: A$%3.\n"
-                        "With CoinSpot's listed 0.1% Markets fee: up to A$%4, within your A$%5 limit. "
-                        "Check CoinSpot's final trade record for the fee and net BTC.\n\n"
-                        "%6\n\nAvailable AUD will be checked before submission. The order may fill partly.")
-      .arg(QString::number(m_amount, 'f', 8), QString::number(m_maxPrice, 'f', 8),
-           QString::number(tradeValue, 'f', 2),
-           QString::number(tradeValue * (1.0 + kMarketsFeeRate), 'f', 2),
-           QString::number(m_budget, 'f', 2), marketContext);
+  const bool askKnown = m_bestAskValue > 0 && m_bookAt.isValid() &&
+                        m_bookAt.secsTo(QDateTime::currentDateTimeUtc()) <= 30;
+  const QString marketContext = askKnown
+      ? (m_maxPrice >= m_bestAskValue
+          ? QStringLiteral("The ask at %1 was A$%2. Your price reaches it, so this should fill straight away.")
+          : QStringLiteral("The ask at %1 was A$%2. Your price is below it, so the order may stay open."))
+            .arg(m_bookAt.toLocalTime().toString(QStringLiteral("HH:mm:ss")), QString::number(m_bestAskValue, 'f', 2))
+      : QStringLiteral("The order book request failed or its quote is stale; immediate fill is unknown.");
+  return {{QStringLiteral("btc"), m_amount},
+          {QStringLiteral("maxPrice"), m_maxPrice},
+          {QStringLiteral("tradeValue"), tradeValue},
+          {QStringLiteral("fee"), tradeValue * kMarketsFeeRate},
+          {QStringLiteral("total"), tradeValue * (1.0 + kMarketsFeeRate)},
+          {QStringLiteral("limit"), m_budget},
+          {QStringLiteral("marketContext"), marketContext}};
 }
 
 QNetworkReply *Buyer::postPrivate(const QString &endpoint, const QJsonObject &fields, bool readOnly) {
@@ -459,54 +550,28 @@ QNetworkReply *Buyer::postPrivate(const QString &endpoint, const QJsonObject &fi
   return m_network.post(request, body);
 }
 
-void Buyer::refreshBalance() {
-  if (!m_readKeyVerified || m_busy) return;
+void Buyer::refreshBalance(bool force) {
+  if (!m_readKeyVerified || m_busy || (m_balanceLoading && !force)) return;
+  m_balanceLoading = true;
+  // Only the newest balance request may update the value, so a reply sent
+  // before a purchase cannot overwrite the balance after it.
+  const quint64 serial = ++m_balanceSerial;
   const QByteArray readKey = m_readKey;
   auto *reply = postPrivate(QStringLiteral("ro/my/balance/AUD?available=yes"), {}, true);
-  connect(reply, &QNetworkReply::finished, this, [this, reply, readKey] {
+  connect(reply, &QNetworkReply::finished, this, [this, reply, readKey, serial] {
+    if (serial != m_balanceSerial) { reply->deleteLater(); return; }
+    m_balanceLoading = false;
     const QJsonObject response = QJsonDocument::fromJson(reply->readAll()).object();
-    if (readKey != m_readKey || !m_readKeyVerified) { reply->deleteLater(); return; }
+    if (readKey != m_readKey || !m_readKeyVerified || m_busy) { reply->deleteLater(); return; }
     const QJsonValue available = response.value(QStringLiteral("balance"))
         .toObject().value(QStringLiteral("AUD")).toObject().value(QStringLiteral("available"));
-    m_availableAud = reply->error() == QNetworkReply::NoError &&
-                             response.value(QStringLiteral("status")).toString() == QLatin1String("ok") &&
-                             available.isDouble() && std::isfinite(available.toDouble()) && available.toDouble() >= 0
-                         ? QString::number(available.toDouble(), 'f', 2) : QString();
+    const bool okay = reply->error() == QNetworkReply::NoError &&
+                      response.value(QStringLiteral("status")).toString() == QLatin1String("ok") &&
+                      available.isDouble() && std::isfinite(available.toDouble()) && available.toDouble() >= 0;
+    m_availableAudValue = okay ? available.toDouble() : -1;
+    m_balanceAt = okay ? QDateTime::currentDateTimeUtc() : QDateTime();
     emit changed();
-    reply->deleteLater();
-  });
-}
-
-void Buyer::suggestAvailableSpend() {
-  if (!m_readKeyVerified || m_busy || m_previewLoading || m_balanceSuggestionLoading) return;
-  m_balanceSuggestionLoading = true;
-  const QByteArray readKey = m_readKey;
-  setStatus(QStringLiteral("Checking available AUD for a spend suggestion…"));
-  auto *reply = postPrivate(QStringLiteral("ro/my/balance/AUD?available=yes"), {}, true);
-  connect(reply, &QNetworkReply::finished, this, [this, reply, readKey] {
-    m_balanceSuggestionLoading = false;
-    const QJsonObject response = QJsonDocument::fromJson(reply->readAll()).object();
-    if (readKey != m_readKey || !m_readKeyVerified) { reply->deleteLater(); return; }
-    const QJsonValue available = response.value(QStringLiteral("balance"))
-        .toObject().value(QStringLiteral("AUD")).toObject().value(QStringLiteral("available"));
-    if (reply->error() != QNetworkReply::NoError ||
-        response.value(QStringLiteral("status")).toString() != QLatin1String("ok") ||
-        !available.isDouble() || !std::isfinite(available.toDouble()) || available.toDouble() < 0) {
-      m_availableAud.clear();
-      setStatus(QStringLiteral("Available AUD could not be checked. No spend amount was suggested."));
-    } else {
-      const double funds = available.toDouble();
-      m_availableAud = QString::number(funds, 'f', 2);
-      // The order size already leaves room for the fee, so the whole balance
-      // can be the ceiling.
-      const double spend = wholeCents(funds);
-      if (spend < 0.01) {
-        setStatus(QStringLiteral("Available AUD is too small for a spend suggestion."));
-      } else {
-        emit suggestedSpendReady(QString::number(spend, 'f', 2));
-        setStatus(QStringLiteral("AUD amount set from your available balance. The order leaves room for the 0.1% fee. Review it before buying."));
-      }
-    }
+    emit marketUpdated();
     reply->deleteLater();
   });
 }
@@ -514,6 +579,8 @@ void Buyer::suggestAvailableSpend() {
 void Buyer::submit() {
   if (m_busy || m_previewLoading || m_journalProblem || m_journalUnsaved || m_uncertainBuy || !keysVerified() || m_amount <= 0) return;
   m_busy = true;
+  ++m_balanceSerial;  // The pre-submit check supersedes any balance request in flight.
+  m_balanceLoading = false;
   setStatus(QStringLiteral("Checking available AUD…"));
   auto *reply = postPrivate(QStringLiteral("ro/my/balance/AUD?available=yes"), {}, true);
   connect(reply, &QNetworkReply::finished, this, [this, reply] {
@@ -527,12 +594,13 @@ void Buyer::submit() {
       setStatus(QStringLiteral("Could not verify available AUD. No order was submitted."));
     } else {
       const double funds = available.toDouble();
-      m_availableAud = QString::number(funds, 'f', 2);
+      m_availableAudValue = funds;
+      m_balanceAt = QDateTime::currentDateTimeUtc();
       const double required = m_amount * m_maxPrice * (1.0 + kMarketsFeeRate);
       if (!std::isfinite(funds) || funds + 0.000001 < required) {
         m_busy = false;
         setStatus(QStringLiteral("Insufficient available AUD: A$%1 needed, A$%2 available. No order was submitted.")
-                      .arg(QString::number(required, 'f', 2), m_availableAud));
+                      .arg(QString::number(required, 'f', 2), availableAud()));
       } else {
         placePreparedOrder();
       }
@@ -593,6 +661,7 @@ void Buyer::placePreparedOrder() {
         setStatus(QStringLiteral("Order accepted by CoinSpot: %1").arg(m_lastOrderId));
       m_orderPoll.start();
       refreshOrderStatus();
+      refreshBalance(true);
     } else if (reply->error() == QNetworkReply::NoError &&
                response.value(QStringLiteral("status")).toString() == QLatin1String("error")) {
       m_amount = 0;
