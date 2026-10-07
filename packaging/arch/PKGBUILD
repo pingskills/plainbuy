@@ -9,7 +9,7 @@ license=('MIT')
 depends=('glibc' 'hicolor-icon-theme' 'libgcc' 'libstdc++' 'libsodium' 'qt6-base' 'qt6-declarative')
 makedepends=('cmake' 'ninja' 'pkgconf')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('SKIP')
+sha256sums=('7678adb1b64067e2f415e8f66ed9fd1f9a525759936f4527c732ae7d7b4d5888')
 
 build() {
   cmake -B build -S "$pkgname-$pkgver" -G Ninja \
