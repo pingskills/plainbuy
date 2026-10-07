@@ -75,6 +75,7 @@ public:
   Q_INVOKABLE void refreshBestAsk();
   Q_INVOKABLE void recommend(const QString &aud);
   Q_INVOKABLE void refreshBalance();
+  Q_INVOKABLE void suggestAvailableSpend();
   Q_INVOKABLE void refreshOrderStatus();
   Q_INVOKABLE void reviewUncertainBuy();
   Q_INVOKABLE void acknowledgeUncertainBuy();
@@ -84,6 +85,7 @@ public:
   Q_INVOKABLE void submit();
   static bool parseMoney(const QString &text, int maxDecimals, double *value);
   static double coinAmount(double audBudget, double maxPrice);
+  static double spendWithFeeReserve(double availableAud);
   static double recommendedCap(QVector<AskLevel> asks, double audBudget);
   static QString describeOrder(const QJsonArray &openOrders,
                                const QJsonArray &completedOrders,
@@ -94,6 +96,7 @@ signals:
   void changed();
   void recommendedPriceChanged();
   void previewReady();
+  void suggestedSpendReady(const QString &amount);
 private:
   void setStatus(const QString &value);
   void fetchBook(double budget, bool forPreview = false);
@@ -111,6 +114,7 @@ private:
   bool m_busy = false;
   bool m_previewLoading = false;
   bool m_statusBusy = false;
+  bool m_balanceSuggestionLoading = false;
   bool m_hasSavedCredentials = false;
   bool m_fullKeyVerified = false;
   bool m_readKeyVerified = false;

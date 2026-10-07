@@ -30,6 +30,9 @@ ApplicationWindow {
             confirmText.text = Buyer.preview()
             confirmDialog.open()
         }
+        function onSuggestedSpendReady(amount) {
+            amountField.text = amount
+        }
     }
 
     menuBar: MenuBar {
@@ -287,6 +290,15 @@ ApplicationWindow {
                     Item { Layout.fillWidth: true }
                     Button { text: qsTr("Refresh"); enabled: Buyer.readKeyVerified && !Buyer.busy; onClicked: Buyer.refreshBalance() }
                 }
+                Label {
+                    Layout.fillWidth: true
+                    visible: !Buyer.availableAud
+                    text: Buyer.readKeyVerified
+                          ? qsTr("Balance unavailable: CoinSpot did not return a usable balance. Refresh to retry.")
+                          : qsTr("Verify a Read Only API key to see your balance.")
+                    color: Theme.muted
+                    wrapMode: Text.Wrap
+                }
             }
             Rectangle {
                 Layout.fillWidth: true
@@ -323,6 +335,18 @@ ApplicationWindow {
                     font.features: { "tnum": 1 }
                     Accessible.name: qsTr("Maximum Australian dollar amount to spend")
                     onAccepted: buyButton.clicked()
+                }
+                Button {
+                    text: qsTr("Use available AUD")
+                    enabled: Buyer.readKeyVerified && !Buyer.busy && !Buyer.previewLoading
+                    onClicked: Buyer.suggestAvailableSpend()
+                    Accessible.name: text
+                }
+                Label {
+                    Layout.fillWidth: true
+                    text: qsTr("Fetches a fresh balance and leaves a 0.1% fee allowance. Review the amount before buying.")
+                    color: Theme.muted
+                    wrapMode: Text.Wrap
                 }
                 Button {
                     text: qsTr("Suggest max price")

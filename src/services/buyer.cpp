@@ -54,6 +54,16 @@ double Buyer::coinAmount(double audBudget, double maxPrice) {
   return static_cast<double>(satoshis / 100000000.0L);
 }
 
+double Buyer::spendWithFeeReserve(double availableAud) {
+  if (!std::isfinite(availableAud) || availableAud <= 0) return 0;
+  // Keep enough AUD for a 0.1% fee if CoinSpot charges it on top of the trade.
+  // Round down to cents so the suggested ceiling never exceeds that reserve.
+  const long double funds = static_cast<long double>(availableAud);
+  auto cents = std::floor(funds / 1.001L * 100.0L);
+  while (cents > 0 && cents / 100.0L * 1.001L > funds) --cents;
+  return static_cast<double>(cents / 100.0L);
+}
+
 double Buyer::recommendedCap(QVector<AskLevel> asks, double audBudget) {
   if (!std::isfinite(audBudget) || audBudget <= 0) return 0;
   std::sort(asks.begin(), asks.end(), [](const AskLevel &a, const AskLevel &b) {
@@ -414,11 +424,10 @@ QString Buyer::preview() const {
       : QStringLiteral("The new order book request failed or its quote is stale; immediate fill is unknown.");
   return QStringLiteral("Buy %1 BTC at no more than A$%2 per BTC?\n\n"
                         "Maximum AUD spend: A$%3.\n"
-                        "Estimated BTC after the 0.1% fee: about %4 BTC.\n\n"
-                        "%5\n\nAvailable AUD will be checked before submission. The order may fill partly.")
+                        "CoinSpot lists a 0.1% Markets fee; check its final trade record for the fee and net BTC.\n\n"
+                        "%4\n\nAvailable AUD will be checked before submission. The order may fill partly.")
       .arg(QString::number(m_amount, 'f', 8), QString::number(m_maxPrice, 'f', 8),
-           QString::number(m_amount * m_maxPrice, 'f', 2),
-           QString::number(m_amount * 0.999, 'f', 8), marketContext);
+           QString::number(m_amount * m_maxPrice, 'f', 2), marketContext);
 }
 
 QNetworkReply *Buyer::postPrivate(const QString &endpoint, const QJsonObject &fields, bool readOnly) {
@@ -452,6 +461,38 @@ void Buyer::refreshBalance() {
                              available.isDouble() && std::isfinite(available.toDouble()) && available.toDouble() >= 0
                          ? QString::number(available.toDouble(), 'f', 2) : QString();
     emit changed();
+    reply->deleteLater();
+  });
+}
+
+void Buyer::suggestAvailableSpend() {
+  if (!m_readKeyVerified || m_busy || m_previewLoading || m_balanceSuggestionLoading) return;
+  m_balanceSuggestionLoading = true;
+  const QByteArray readKey = m_readKey;
+  setStatus(QStringLiteral("Checking available AUD for a spend suggestion…"));
+  auto *reply = postPrivate(QStringLiteral("ro/my/balance/AUD?available=yes"), {}, true);
+  connect(reply, &QNetworkReply::finished, this, [this, reply, readKey] {
+    m_balanceSuggestionLoading = false;
+    const QJsonObject response = QJsonDocument::fromJson(reply->readAll()).object();
+    if (readKey != m_readKey || !m_readKeyVerified) { reply->deleteLater(); return; }
+    const QJsonValue available = response.value(QStringLiteral("balance"))
+        .toObject().value(QStringLiteral("AUD")).toObject().value(QStringLiteral("available"));
+    if (reply->error() != QNetworkReply::NoError ||
+        response.value(QStringLiteral("status")).toString() != QLatin1String("ok") ||
+        !available.isDouble() || !std::isfinite(available.toDouble()) || available.toDouble() < 0) {
+      m_availableAud.clear();
+      setStatus(QStringLiteral("Available AUD could not be checked. No spend amount was suggested."));
+    } else {
+      const double funds = available.toDouble();
+      m_availableAud = QString::number(funds, 'f', 2);
+      const double spend = spendWithFeeReserve(funds);
+      if (spend < 0.01) {
+        setStatus(QStringLiteral("Available AUD is too small for a spend suggestion after the fee allowance."));
+      } else {
+        emit suggestedSpendReady(QString::number(spend, 'f', 2));
+        setStatus(QStringLiteral("AUD amount set from your available balance with a 0.1% fee allowance. Review it before buying."));
+      }
+    }
     reply->deleteLater();
   });
 }

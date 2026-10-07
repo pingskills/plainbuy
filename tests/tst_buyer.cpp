@@ -30,6 +30,14 @@ private slots:
     QVERIFY(fractional * 123456.78 <= 100.01 + 0.00000001);
     QVERIFY((fractional + 0.00000001) * 123456.78 > 100.01);
   }
+  void reservesAudForMarketFee() {
+    QCOMPARE(pb::Buyer::spendWithFeeReserve(100.0), 99.90);
+    QCOMPARE(pb::Buyer::spendWithFeeReserve(0.01), 0.0);
+    QCOMPARE(pb::Buyer::spendWithFeeReserve(0.0), 0.0);
+    const double spend = pb::Buyer::spendWithFeeReserve(1234.56);
+    QVERIFY(spend * 1.001 <= 1234.56 + 0.000000001);
+    QVERIFY((spend + 0.01) * 1.001 > 1234.56);
+  }
   void suggestsLowestSufficientAsk() {
     const QVector<pb::AskLevel> asks{{101000, 0.001}, {100000, 0.0005}};
     QCOMPARE(pb::Buyer::recommendedCap(asks, 40), 100000.0);
