@@ -15,7 +15,20 @@ ctest --test-dir build --output-on-failure
 ./build/plainbuy
 ```
 
-To add a launcher on Linux, configure with your chosen `CMAKE_INSTALL_PREFIX`, build, and run `cmake --install build`. The install step places only the executable, desktop entry, and icon.
+## Install
+
+On Arch Linux / Omarchy, install the build dependencies and build a local pacman package:
+
+```sh
+sudo pacman -S --needed base-devel cmake ninja pkgconf libsodium qt6-base qt6-declarative hicolor-icon-theme
+git clone https://github.com/pingskills/plainbuy.git
+cd plainbuy/packaging/arch
+makepkg -si
+```
+
+This installs PlainBuy system-wide through pacman, so `sudo pacman -R plainbuy` removes it later. The package is built from the fixed `v0.1.0` source archive on GitHub; it is not published to the AUR. When building from an existing checkout, start with `cd packaging/arch`.
+
+On other Linux distributions, configure with `-DCMAKE_INSTALL_PREFIX=/usr/local`, build, then run `sudo cmake --install build`. The install step places the executable, desktop entry, icon, and license. It does not install API keys or order history.
 
 ## Use
 
