@@ -26,7 +26,7 @@ cd plainbuy/packaging/arch
 makepkg -si
 ```
 
-This installs PlainBuy system-wide through pacman, so `sudo pacman -R plainbuy` removes it later. The package is built from the fixed `v0.1.4` source archive on GitHub; it is not published to the AUR. When building from an existing checkout, start with `cd packaging/arch`.
+This installs PlainBuy system-wide through pacman, so `sudo pacman -R plainbuy` removes it later. The package is built from the fixed `v0.1.5` source archive on GitHub; it is not published to the AUR. When building from an existing checkout, start with `cd packaging/arch`.
 
 On other Linux distributions, configure with `-DCMAKE_INSTALL_PREFIX=/usr/local`, build, then run `sudo cmake --install build`. The install step places the executable, desktop entry, icon, and license. It does not install API keys or order history.
 

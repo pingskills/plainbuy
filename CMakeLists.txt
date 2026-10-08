@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(plainbuy VERSION 0.1.4 DESCRIPTION "A small Bitcoin buy app for CoinSpot" HOMEPAGE_URL "https://github.com/pingskills/plainbuy" LANGUAGES CXX)
+project(plainbuy VERSION 0.1.5 DESCRIPTION "A small Bitcoin buy app for CoinSpot" HOMEPAGE_URL "https://github.com/pingskills/plainbuy" LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 include(GNUInstallDirs)
