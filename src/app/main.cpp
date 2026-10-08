@@ -7,9 +7,26 @@
 #include <QQmlExtensionPlugin>
 #include <QQmlEngine>
 #include <QQuickStyle>
+#include <cstdio>
+#include <cstring>
 
 Q_IMPORT_QML_PLUGIN(PlainBuyPlugin)
 int main(int argc, char **argv) {
+  // Answered before the GUI starts, so they work without a display.
+  for (int i = 1; i < argc; ++i) {
+    if (std::strcmp(argv[i], "--version") == 0 || std::strcmp(argv[i], "-v") == 0) {
+      std::printf("plainbuy %s\n", PLAINBUY_VERSION);
+      return 0;
+    }
+    if (std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0) {
+      std::printf("Usage: plainbuy [options]\n"
+                  "A small Bitcoin buy app for CoinSpot.\n\n"
+                  "  -h, --help     Show this help and exit.\n"
+                  "  -v, --version  Show the version and exit.\n\n"
+                  "With no options, PlainBuy opens its window.\n");
+      return 0;
+    }
+  }
   QGuiApplication app(argc, argv);
   QCoreApplication::setApplicationName(QStringLiteral("plainbuy"));
   QCoreApplication::setApplicationVersion(QStringLiteral(PLAINBUY_VERSION));
