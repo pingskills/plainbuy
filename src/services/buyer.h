@@ -8,6 +8,7 @@
 #include <QTimer>
 #include <QVariantMap>
 #include <QVector>
+#include <functional>
 
 namespace pb {
 struct AskLevel { double rate; double amount; };
@@ -117,6 +118,9 @@ public:
   static QJsonObject fillSummary(const QJsonArray &completedOrders, const QString &orderId);
   static bool keepsRecordedFill(const QJsonObject &order, const QJsonObject &fills);
   static bool apiStatusOkay(const QJsonObject &response);
+  // CoinSpot's error message, else the network or HTTP error, for status lines.
+  static QString failureReason(QNetworkReply::NetworkError error, const QString &errorString,
+                               int httpStatus, const QJsonObject &response);
 signals:
   void changed();
   void marketUpdated();
@@ -126,7 +130,11 @@ private:
   void fetchBook(bool forPreview = false);
   void finishPreview();
   bool bookFresh() const;
-  QNetworkReply *postPrivate(const QString &endpoint, const QJsonObject &fields, bool readOnly);
+  using PrivateHandler = std::function<void(QNetworkReply *, const QJsonObject &)>;
+  // Queues a signed request; each key has at most one in flight, so nonces reach CoinSpot in order.
+  void postPrivate(const QString &endpoint, const QJsonObject &fields, bool readOnly, PrivateHandler done);
+  void sendNextPrivate(bool readOnly);
+  static QString failureReason(QNetworkReply *reply, const QJsonObject &response);
   void placePreparedOrder();
   void loadOrders();
   void updateOrder(const QString &id, const QString &state, const QJsonObject &fills = {});
@@ -138,9 +146,19 @@ private:
   QByteArray m_key, m_secret, m_readKey, m_readSecret;
   qint64 m_nonce = 0;
   qint64 m_readNonce = 0;
+  struct PrivateRequest {
+    QString endpoint;
+    QJsonObject fields;
+    QByteArray key, secret;
+    PrivateHandler done;
+  };
+  QList<PrivateRequest> m_fullQueue, m_readQueue;
+  bool m_fullInFlight = false;
+  bool m_readInFlight = false;
   bool m_busy = false;
   bool m_previewLoading = false;
   bool m_statusBusy = false;
+  bool m_statusIsOrderFailure = false;
   bool m_balanceLoading = false;
   bool m_followMarket = false;
   bool m_hasSavedCredentials = false;

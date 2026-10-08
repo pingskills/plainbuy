@@ -22,6 +22,20 @@ private slots:
     QVERIFY(!pb::Buyer::apiStatusOkay(QJsonObject{{"status", "error"}}));
     QVERIFY(!pb::Buyer::apiStatusOkay(QJsonObject{}));
   }
+  void explainsRequestFailures() {
+    using pb::Buyer;
+    QCOMPARE(Buyer::failureReason(QNetworkReply::NoError, {}, 200,
+                                  QJsonObject{{"status", "error"}, {"message", "Invalid nonce"}}),
+             QStringLiteral("Invalid nonce"));
+    QCOMPARE(Buyer::failureReason(QNetworkReply::OperationCanceledError, "Operation canceled", 0, {}),
+             QStringLiteral("no response within 15 seconds"));
+    QCOMPARE(Buyer::failureReason(QNetworkReply::ServiceUnavailableError, "Service unavailable", 503, {}),
+             QStringLiteral("HTTP 503"));
+    QCOMPARE(Buyer::failureReason(QNetworkReply::HostNotFoundError, "Host not found", 0, {}),
+             QStringLiteral("Host not found"));
+    QCOMPARE(Buyer::failureReason(QNetworkReply::NoError, {}, 200, QJsonObject{{"status", "ok"}}),
+             QStringLiteral("unexpected response"));
+  }
   void respectsBudget() {
     const double amount = pb::Buyer::coinAmount(100.0, 100000.0);
     QCOMPARE(amount, 0.001);

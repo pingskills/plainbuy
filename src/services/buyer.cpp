@@ -137,7 +137,11 @@ double Buyer::recommendedCap(QVector<AskLevel> asks, double audBudget) {
   return 0;
 }
 
-void Buyer::setStatus(const QString &value) { m_status = value; emit changed(); }
+void Buyer::setStatus(const QString &value) {
+  m_status = value;
+  m_statusIsOrderFailure = false;
+  emit changed();
+}
 
 bool Buyer::apiStatusOkay(const QJsonObject &response) {
   return response.value(QStringLiteral("status")).toString() == QLatin1String("ok");
@@ -149,9 +153,7 @@ void Buyer::validateFullKey() {
   m_fullKeyStatus = connected() ? QStringLiteral("Checking…") : QStringLiteral("Not entered");
   emit changed();
   if (!connected()) return;
-  auto *reply = postPrivate(QStringLiteral("status"), {}, false);
-  connect(reply, &QNetworkReply::finished, this, [this, reply, serial] {
-    const QJsonObject response = QJsonDocument::fromJson(reply->readAll()).object();
+  postPrivate(QStringLiteral("status"), {}, false, [this, serial](QNetworkReply *reply, const QJsonObject &response) {
     if (serial == m_fullValidationSerial) {
       m_fullKeyVerified = reply->error() == QNetworkReply::NoError && apiStatusOkay(response);
       const int httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
@@ -162,7 +164,6 @@ void Buyer::validateFullKey() {
               : QStringLiteral("Could not verify; retry");
       emit changed();
     }
-    reply->deleteLater();
   });
 }
 
@@ -173,9 +174,7 @@ void Buyer::validateReadKey() {
   m_readKeyStatus = readOnlyReady() ? QStringLiteral("Checking…") : QStringLiteral("Not entered");
   emit changed();
   if (!readOnlyReady()) return;
-  auto *reply = postPrivate(QStringLiteral("ro/status"), {}, true);
-  connect(reply, &QNetworkReply::finished, this, [this, reply, serial] {
-    const QJsonObject response = QJsonDocument::fromJson(reply->readAll()).object();
+  postPrivate(QStringLiteral("ro/status"), {}, true, [this, serial](QNetworkReply *reply, const QJsonObject &response) {
     if (serial == m_readValidationSerial) {
       m_readKeyVerified = reply->error() == QNetworkReply::NoError && apiStatusOkay(response);
       const int httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
@@ -191,7 +190,6 @@ void Buyer::validateReadKey() {
         refreshOrderStatus();
       }
     }
-    reply->deleteLater();
   });
 }
 
@@ -533,21 +531,55 @@ QVariantMap Buyer::preview() const {
           {QStringLiteral("marketContext"), marketContext}};
 }
 
-QNetworkReply *Buyer::postPrivate(const QString &endpoint, const QJsonObject &fields, bool readOnly) {
+void Buyer::postPrivate(const QString &endpoint, const QJsonObject &fields, bool readOnly, PrivateHandler done) {
+  auto &queue = readOnly ? m_readQueue : m_fullQueue;
+  queue.append({endpoint, fields, readOnly ? m_readKey : m_key, readOnly ? m_readSecret : m_secret, std::move(done)});
+  sendNextPrivate(readOnly);
+}
+
+void Buyer::sendNextPrivate(bool readOnly) {
+  auto &queue = readOnly ? m_readQueue : m_fullQueue;
+  bool &inFlight = readOnly ? m_readInFlight : m_fullInFlight;
+  if (inFlight || queue.isEmpty()) return;
+  inFlight = true;
+  PrivateRequest next = queue.takeFirst();
+  // The nonce is taken at send time; CoinSpot rejects one lower than the key's last.
   qint64 &nonce = readOnly ? m_readNonce : m_nonce;
   nonce = std::max(nonce + 1, QDateTime::currentMSecsSinceEpoch());
-  QJsonObject payload = fields;
+  QJsonObject payload = next.fields;
   payload.insert(QStringLiteral("nonce"), static_cast<double>(nonce));
   const QByteArray body = QJsonDocument(payload).toJson(QJsonDocument::Compact);
-  const QByteArray &key = readOnly ? m_readKey : m_key;
-  const QByteArray &secret = readOnly ? m_readSecret : m_secret;
-  const QByteArray signature = QMessageAuthenticationCode::hash(body, secret, QCryptographicHash::Sha512).toHex();
-  QNetworkRequest request(QUrl(QStringLiteral("https://www.coinspot.com.au/api/v2/") + endpoint));
+  const QByteArray signature = QMessageAuthenticationCode::hash(body, next.secret, QCryptographicHash::Sha512).toHex();
+  QNetworkRequest request(QUrl(QStringLiteral("https://www.coinspot.com.au/api/v2/") + next.endpoint));
   request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
-  request.setRawHeader("key", key);
+  request.setRawHeader("key", next.key);
   request.setRawHeader("sign", signature);
   request.setTransferTimeout(15000);
-  return m_network.post(request, body);
+  auto *reply = m_network.post(request, body);
+  connect(reply, &QNetworkReply::finished, this, [this, reply, readOnly, endpoint = next.endpoint, done = std::move(next.done)] {
+    const QJsonObject response = QJsonDocument::fromJson(reply->readAll()).object();
+    if (reply->error() != QNetworkReply::NoError || !apiStatusOkay(response))
+      qWarning("CoinSpot %s failed: %s", qPrintable(endpoint), qPrintable(failureReason(reply, response)));
+    (readOnly ? m_readInFlight : m_fullInFlight) = false;
+    done(reply, response);
+    reply->deleteLater();
+    sendNextPrivate(readOnly);
+  });
+}
+
+QString Buyer::failureReason(QNetworkReply *reply, const QJsonObject &response) {
+  return failureReason(reply->error(), reply->errorString(),
+                       reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt(), response);
+}
+
+QString Buyer::failureReason(QNetworkReply::NetworkError error, const QString &errorString,
+                             int httpStatus, const QJsonObject &response) {
+  const QString message = response.value(QStringLiteral("message")).toString().trimmed();
+  if (!message.isEmpty()) return message;
+  if (error == QNetworkReply::OperationCanceledError) return QStringLiteral("no response within 15 seconds");
+  if (httpStatus >= 400) return QStringLiteral("HTTP %1").arg(httpStatus);
+  if (error != QNetworkReply::NoError) return errorString;
+  return QStringLiteral("unexpected response");
 }
 
 void Buyer::refreshBalance(bool force) {
@@ -557,12 +589,11 @@ void Buyer::refreshBalance(bool force) {
   // before a purchase cannot overwrite the balance after it.
   const quint64 serial = ++m_balanceSerial;
   const QByteArray readKey = m_readKey;
-  auto *reply = postPrivate(QStringLiteral("ro/my/balance/AUD?available=yes"), {}, true);
-  connect(reply, &QNetworkReply::finished, this, [this, reply, readKey, serial] {
-    if (serial != m_balanceSerial) { reply->deleteLater(); return; }
+  postPrivate(QStringLiteral("ro/my/balance/AUD?available=yes"), {}, true,
+              [this, readKey, serial](QNetworkReply *reply, const QJsonObject &response) {
+    if (serial != m_balanceSerial) return;
     m_balanceLoading = false;
-    const QJsonObject response = QJsonDocument::fromJson(reply->readAll()).object();
-    if (readKey != m_readKey || !m_readKeyVerified || m_busy) { reply->deleteLater(); return; }
+    if (readKey != m_readKey || !m_readKeyVerified || m_busy) return;
     const QJsonValue available = response.value(QStringLiteral("balance"))
         .toObject().value(QStringLiteral("AUD")).toObject().value(QStringLiteral("available"));
     const bool okay = reply->error() == QNetworkReply::NoError &&
@@ -572,7 +603,6 @@ void Buyer::refreshBalance(bool force) {
     m_balanceAt = okay ? QDateTime::currentDateTimeUtc() : QDateTime();
     emit changed();
     emit marketUpdated();
-    reply->deleteLater();
   });
 }
 
@@ -582,16 +612,15 @@ void Buyer::submit() {
   ++m_balanceSerial;  // The pre-submit check supersedes any balance request in flight.
   m_balanceLoading = false;
   setStatus(QStringLiteral("Checking available AUD…"));
-  auto *reply = postPrivate(QStringLiteral("ro/my/balance/AUD?available=yes"), {}, true);
-  connect(reply, &QNetworkReply::finished, this, [this, reply] {
-    const QJsonObject response = QJsonDocument::fromJson(reply->readAll()).object();
+  postPrivate(QStringLiteral("ro/my/balance/AUD?available=yes"), {}, true, [this](QNetworkReply *reply, const QJsonObject &response) {
     const QJsonValue available = response.value(QStringLiteral("balance"))
         .toObject().value(QStringLiteral("AUD")).toObject().value(QStringLiteral("available"));
     if (reply->error() != QNetworkReply::NoError ||
         response.value(QStringLiteral("status")).toString() != QLatin1String("ok") ||
         !available.isDouble() || !std::isfinite(available.toDouble()) || available.toDouble() < 0) {
       m_busy = false;
-      setStatus(QStringLiteral("Could not verify available AUD. No order was submitted."));
+      setStatus(QStringLiteral("Could not verify available AUD (%1). No order was submitted.")
+                    .arg(failureReason(reply, response)));
     } else {
       const double funds = available.toDouble();
       m_availableAudValue = funds;
@@ -605,7 +634,6 @@ void Buyer::submit() {
         placePreparedOrder();
       }
     }
-    reply->deleteLater();
   });
 }
 
@@ -632,10 +660,8 @@ void Buyer::placePreparedOrder() {
                             {QStringLiteral("markettype"), QStringLiteral("AUD")},
                             {QStringLiteral("amount"), m_amount},
                             {QStringLiteral("rate"), m_maxPrice}};
-  auto *reply = postPrivate(QStringLiteral("my/buy"), payload, false);
-  connect(reply, &QNetworkReply::finished, this, [this, reply, attemptId, attemptDate] {
-    const QByteArray data = reply->readAll();
-    const QJsonObject response = QJsonDocument::fromJson(data).object();
+  postPrivate(QStringLiteral("my/buy"), payload, false,
+              [this, attemptId, attemptDate](QNetworkReply *reply, const QJsonObject &response) {
     m_busy = false;
     if (reply->error() == QNetworkReply::NoError &&
         response.value(QStringLiteral("status")).toString() == QLatin1String("ok") &&
@@ -680,7 +706,6 @@ void Buyer::placePreparedOrder() {
       saveOrders();
       setStatus(QStringLiteral("Buy request outcome unknown. Use Refresh to review below and check CoinSpot before another buy."));
     }
-    reply->deleteLater();
   });
 }
 
@@ -782,13 +807,10 @@ void Buyer::refreshOrderStatus() {
   const QJsonObject fields{{QStringLiteral("cointype"), QStringLiteral("BTC")},
                            {QStringLiteral("markettype"), QStringLiteral("AUD")}};
   const QByteArray readKey = m_readKey;
-  auto *openReply = postPrivate(QStringLiteral("ro/my/orders/market/open"), fields, true);
-  connect(openReply, &QNetworkReply::finished, this, [this, openReply, fields, readKey] {
-    const QJsonObject openResponse = QJsonDocument::fromJson(openReply->readAll()).object();
+  postPrivate(QStringLiteral("ro/my/orders/market/open"), fields, true, [this, fields, readKey](QNetworkReply *openReply, const QJsonObject &openResponse) {
     const bool openOkay = openReply->error() == QNetworkReply::NoError &&
                            openResponse.value(QStringLiteral("status")).toString() == QLatin1String("ok") &&
                            openResponse.value(QStringLiteral("buyorders")).isArray();
-    openReply->deleteLater();
     if (readKey != m_readKey || !m_readKeyVerified) { m_statusBusy = false; return; }
     if (!openOkay) {
       m_statusBusy = false;
@@ -797,12 +819,16 @@ void Buyer::refreshOrderStatus() {
       m_openOrders = {};
       m_ordersLoaded = false; m_ordersFailed = true;
       m_orderState = QStringLiteral("Could not refresh order status. Check CoinSpot.");
-      setStatus(QStringLiteral("Could not refresh open orders. Check CoinSpot before placing another buy."));
+      setStatus(QStringLiteral("Could not refresh open orders (%1). Retrying every 15 seconds; check CoinSpot before placing another buy.")
+                    .arg(failureReason(openReply, openResponse)));
+      m_statusIsOrderFailure = true;
       return;
     }
     m_openOrders = openResponse.value(QStringLiteral("buyorders")).toArray();
     m_ordersLoaded = true;
     m_ordersFailed = false;
+    // A later successful check replaces an earlier failure message.
+    if (m_statusIsOrderFailure) setStatus({});
     emit changed();
     if (m_orders.isEmpty()) { m_statusBusy = false; m_reviewRequested = false; return; }
     QJsonObject historyFields = fields;
@@ -818,14 +844,12 @@ void Buyer::refreshOrderStatus() {
     }
     if (!earliestDate.isEmpty()) historyFields.insert(QStringLiteral("startdate"), earliestDate);
     historyFields.insert(QStringLiteral("limit"), 500);
-    auto *historyReply = postPrivate(QStringLiteral("ro/my/orders/market/completed"), historyFields, true);
-    connect(historyReply, &QNetworkReply::finished, this, [this, historyReply, readKey] {
-      const QJsonObject history = QJsonDocument::fromJson(historyReply->readAll()).object();
+    postPrivate(QStringLiteral("ro/my/orders/market/completed"), historyFields, true, [this, readKey](QNetworkReply *historyReply, const QJsonObject &history) {
       const bool historyOkay = historyReply->error() == QNetworkReply::NoError &&
                                 history.value(QStringLiteral("status")).toString() == QLatin1String("ok") &&
                                 history.value(QStringLiteral("buyorders")).isArray();
       m_statusBusy = false;
-      if (readKey != m_readKey || !m_readKeyVerified) { historyReply->deleteLater(); return; }
+      if (readKey != m_readKey || !m_readKeyVerified) return;
       if (historyOkay) {
         const QJsonArray completed = history.value(QStringLiteral("buyorders")).toArray();
         const QJsonArray trackedOrders = m_orders;
@@ -851,7 +875,6 @@ void Buyer::refreshOrderStatus() {
       }
       m_reviewRequested = false;
       emit changed();
-      historyReply->deleteLater();
     });
   });
 }
@@ -864,10 +887,8 @@ void Buyer::cancelOrder(const QString &id) {
   if (!found) { setStatus(QStringLiteral("Refresh open orders before cancelling; this order is not currently listed.")); return; }
   m_busy = true;
   setStatus(QStringLiteral("Requesting cancellation of order %1…").arg(id));
-  auto *reply = postPrivate(QStringLiteral("my/buy/cancel"),
-                            QJsonObject{{QStringLiteral("id"), id}}, false);
-  connect(reply, &QNetworkReply::finished, this, [this, reply, id] {
-    const QJsonObject response = QJsonDocument::fromJson(reply->readAll()).object();
+  postPrivate(QStringLiteral("my/buy/cancel"), QJsonObject{{QStringLiteral("id"), id}}, false,
+              [this, id](QNetworkReply *reply, const QJsonObject &response) {
     m_busy = false;
     if (reply->error() == QNetworkReply::NoError &&
         response.value(QStringLiteral("status")).toString() == QLatin1String("ok")) {
@@ -879,7 +900,6 @@ void Buyer::cancelOrder(const QString &id) {
       setStatus(QStringLiteral("CoinSpot rejected cancellation: %1").arg(response.value(QStringLiteral("message")).toString()));
     }
     refreshOrderStatus();
-    reply->deleteLater();
   });
 }
 } // namespace pb
